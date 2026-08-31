@@ -1,161 +1,194 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
+import logging
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from typing import Dict, Any, List, Optional
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.session import get_db
 from app.db import models
 
+# Configuración del registrador de eventos
+logger = logging.getLogger("api_orchestrator")
+
 router = APIRouter()
 
 # ===============================================================================
-# UTILERÍAS DE EXTRACCIÓN Y SERIALIZACIÓN
+# ESQUEMAS PYDANTIC (DTOs DE ENTRADA Y SALIDA)
 # ===============================================================================
+class EmpresaCreateSchema(BaseModel):
+    nombre_comercial: str = Field(..., example="Empresa Demo S.A.S.")
+    nit: str = Field(..., example="900123456-1")
+    software_erp: Optional[str] = Field(default="SIIGO_NUBE", example="SIIGO_NUBE")
+    software_destino: Optional[str] = Field(default="SIIGO_NUBE", example="SIIGO_NUBE")
+    logo_url: Optional[str] = Field(default=None, example="https://dominio.com/logo.png")
 
-async def extraer_payload(request: Request) -> Dict[str, Any]:
-    """Extrae payloads en formato JSON o Form-Data de manera resiliente."""
-    try:
-        return await request.json()
-    except Exception:
-        try:
-            return dict(await request.form())
-        except Exception:
-            return {}
+class AsignarEmpresasSchema(BaseModel):
+    empresa_ids: List[int] = Field(..., example=[1, 2, 3])
 
+class EmpresaResponseSchema(BaseModel):
+    id_empresa: int
+    nombre_comercial: str
+    nit: str
+    logo_url: Optional[str] = None
+    software_erp: Optional[str] = None
 
-def serializar_empresa(e: models.Empresa) -> Dict[str, Any]:
-    """DTO plano para representación de la dimensión Empresas."""
-    return {
-        "id_empresa": e.id_empresa,
-        "id": e.id_empresa,
-        "nombre_comercial": e.nombre_comercial,
-        "razon_social": e.nombre_comercial,
-        "nombre": e.nombre_comercial,
-        "nit": e.nit,
-        "logo_url": e.logo_url,
-        "software_erp": e.software_erp,
-        "software_destino": e.software_destino
-    }
-
+    class Config:
+        from_attributes = True
 
 # ===============================================================================
-# ENDPOINTS DE GESTIÓN DE EMPRESAS CON FILTRADO RLS
+# ENDPOINTS REST (GESTIÓN MULTI-TENANT Y GOBERNANZA DE ACCESOS)
 # ===============================================================================
 
-@router.get("", tags=["Empresas"])
-@router.get("/", include_in_schema=False)
-@router.get("/auth/empresas", include_in_schema=False)
-@router.get("/auth/empresas/", include_in_schema=False)
+@router.get("/", response_model=List[EmpresaResponseSchema], summary="Listar empresas por permisos de usuario")
 def listar_empresas(
-    email: Optional[str] = Query(None),
-    rol: Optional[str] = Query(None),
+    email: Optional[str] = Query(None, description="Email del usuario autenticado"),
+    rol: Optional[str] = Query(None, description="Rol del usuario (Administrador / Analista)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Retorna el portafolio de empresas auditables según el rol del usuario:
+    - Administrador: Acceso global a todas las empresas activas.
+    - Analista: Acceso filtrado por la matriz de permisos (Tabla asociativa).
+    """
+    try:
+        if rol == "Administrador" or not email:
+            empresas = db.query(models.Empresa).all()
+            return empresas
+
+        # Búsqueda de usuario para evaluar permisos específicos
+        usuario = db.query(models.Usuario).filter(models.Usuario.email == email).first()
+        if not usuario:
+            return []
+
+        # Si el usuario es Administrador por BD
+        if getattr(usuario, 'rol', '') == "Administrador":
+            return db.query(models.Empresa).all()
+
+        # Filtrar empresas asociadas mediante la relación de accesos
+        if hasattr(usuario, 'empresas_asociadas') and usuario.empresas_asociadas:
+            return usuario.empresas_asociadas
+
+        return []
+
+    except SQLAlchemyError as exc:
+        logger.error(f"Error al consultar lista de empresas: {str(exc)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Inconsistencia de lectura en la base de datos de empresas."
+        )
+
+
+@router.post("/", response_model=EmpresaResponseSchema, status_code=status.HTTP_201_CREATED, summary="Crear un nuevo cliente")
+def crear_empresa(
+    payload: EmpresaCreateSchema,
     creador_email: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """
-    [ROW-LEVEL SECURITY - RLS INTELIGENTE]
-    1. Si se envía email y el rol es 'Analista': Retorna SOLO las empresas autorizadas.
-    2. Si se envía email y el rol es 'Administrador' OR no se envía email (Consulta de Catálogo Maestro para Modales):
-       Retorna la totalidad de empresas creadas en PostgreSQL.
+    Registra una nueva entidad contable/cliente y vincula automáticamente
+    al usuario creador como gestor autorizado.
     """
-    user_email = str(email or creador_email or "").strip().lower()
-    user_rol = str(rol or "").strip().lower()
+    try:
+        # Verificar duplicidad por NIT
+        empresa_existente = db.query(models.Empresa).filter(models.Empresa.nit == payload.nit).first()
+        if empresa_existente:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Ya existe un cliente registrado con el NIT {payload.nit}"
+            )
 
-    if user_email:
-        usr = db.query(models.Usuario).filter(models.Usuario.email == user_email).first()
-        if usr:
-            # Si el usuario es Administrador, retorna el catálogo corporativo completo
-            if (usr.rol and usr.rol.lower() in ["administrador", "admin"]) or (user_rol in ["administrador", "admin"]):
-                empresas = db.query(models.Empresa).order_by(models.Empresa.id_empresa.asc()).all()
-                return [serializar_empresa(e) for e in empresas]
-            
-            # Si es Analista, filtra estrictamente su portafolio autorizado
-            return [serializar_empresa(e) for e in usr.empresas_asignadas]
+        nueva_empresa = models.Empresa(
+            nombre_comercial=payload.nombre_comercial,
+            nit=payload.nit,
+            software_erp=payload.software_erp,
+            software_destino=payload.software_destino,
+            logo_url=payload.logo_url
+        )
+        db.add(nueva_empresa)
+        db.commit()
+        db.refresh(nueva_empresa)
 
-    # [SOLUCIÓN AL MODAL DE ASIGNACIÓN]
-    # Si la petición viene sin email (ej. consulta administrativa global), retorna el catálogo maestro
-    todas_las_empresas = db.query(models.Empresa).order_by(models.Empresa.id_empresa.asc()).all()
-    return [serializar_empresa(e) for e in todas_las_empresas]
+        # Autovinculación del creador
+        if creador_email:
+            usuario = db.query(models.Usuario).filter(models.Usuario.email == creador_email).first()
+            if usuario and hasattr(usuario, 'empresas_asociadas'):
+                usuario.empresas_asociadas.append(nueva_empresa)
+                db.commit()
+
+        return nueva_empresa
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error(f"Error al crear empresa: {str(exc)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error en la transacción de creación de empresa."
+        )
 
 
-@router.post("", tags=["Empresas"])
-@router.post("/", include_in_schema=False)
-@router.post("/auth/empresas", include_in_schema=False)
-async def crear_empresa(
-    request: Request, 
-    creador_email: Optional[str] = Query(None),
+@router.get("/{id_usuario}/accesos", response_model=List[int], summary="Obtener IDs de empresas asignadas")
+def obtener_accesos_usuario(
+    id_usuario: int,
     db: Session = Depends(get_db)
 ):
     """
-    Crea una nueva empresa en la base de datos y la vincula automáticamente
-    al usuario que la creó para que tenga acceso inmediato a ella.
+    Retorna la lista pura de IDs (`id_empresa`) a las que un usuario
+    tiene permiso de auditoría y gestión.
     """
-    data = await extraer_payload(request)
+    usuario = db.query(models.Usuario).filter(models.Usuario.id_usuario == id_usuario).first()
+    if not usuario:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Usuario con ID {id_usuario} no encontrado."
+        )
 
-    razon_social = str(
-        data.get("razon_social") or 
-        data.get("nombre_comercial") or 
-        data.get("nombre") or ""
-    ).strip()
-    
-    nit = str(data.get("nit") or "").strip()
-    logo_url = str(data.get("logo_url") or data.get("logo") or "").strip()
-    
-    software = str(
-        data.get("software_erp") or 
-        data.get("software_destino") or 
-        data.get("software") or "SIIGO NUBE"
-    ).strip()
+    try:
+        if hasattr(usuario, 'empresas_asociadas') and usuario.empresas_asociadas:
+            return [emp.id_empresa for emp in usuario.empresas_asociadas]
+        return []
+    except Exception as exc:
+        logger.error(f"Error al obtener accesos de id_usuario={id_usuario}: {str(exc)}")
+        return []
 
-    if not razon_social or not nit:
-        raise HTTPException(status_code=400, detail="La Razón Social y el NIT son obligatorios.")
 
-    if db.query(models.Empresa).filter(models.Empresa.nit == nit).first():
-        raise HTTPException(status_code=400, detail=f"El NIT {nit} ya se encuentra registrado.")
+@router.post("/{id_usuario}/asignar", summary="Actualizar matriz de permisos multi-tenant")
+def guardar_asignacion_accesos(
+    id_usuario: int,
+    payload: AsignarEmpresasSchema,
+    db: Session = Depends(get_db)
+):
+    """
+    Sincroniza masivamente la tabla asociativa de permisos para el usuario especificado.
+    """
+    usuario = db.query(models.Usuario).filter(models.Usuario.id_usuario == id_usuario).first()
+    if not usuario:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Usuario con ID {id_usuario} no encontrado."
+        )
 
-    nueva = models.Empresa(
-        nombre_comercial=razon_social,
-        nit=nit,
-        logo_url=logo_url if logo_url else None,
-        software_erp=software,
-        software_destino=software
-    )
+    try:
+        # Obtener las instancias de las empresas seleccionadas
+        empresas_seleccionadas = db.query(models.Empresa).filter(
+            models.Empresa.id_empresa.in_(payload.empresa_ids)
+        ).all() if payload.empresa_ids else []
 
-    db.add(nueva)
-    db.commit()
-    db.refresh(nueva)
-
-    # AUTO-VINCULACIÓN RLS: Asignar la nueva empresa al usuario creador
-    email_target = str(creador_email or data.get("creador_email") or data.get("email") or "").strip().lower()
-    if email_target:
-        usr = db.query(models.Usuario).filter(models.Usuario.email == email_target).first()
-        if usr and nueva not in usr.empresas_asignadas:
-            usr.empresas_asignadas.append(nueva)
+        # Actualización de la relación de la entidad de usuario
+        if hasattr(usuario, 'empresas_asociadas'):
+            usuario.empresas_asociadas = empresas_seleccionadas
             db.commit()
 
-    emp_payload = serializar_empresa(nueva)
-    print(f"\n---> [EMPRESA REGISTRADA Y VINCULADA] ID: {nueva.id_empresa} | Cliente: '{razon_social}'")
+        return {
+            "status": "success",
+            "mensaje": f"Se actualizaron los permisos del usuario {usuario.nombre_completo}.",
+            "empresas_asignadas": len(empresas_seleccionadas)
+        }
 
-    return {
-        "status": "success",
-        "success": True,
-        "mensaje": "Empresa creada e integrada a su portafolio exitosamente.",
-        "empresa": emp_payload,
-        "data": emp_payload,
-        "cliente": emp_payload,
-        **emp_payload
-    }
-
-
-@router.delete("/{id_empresa}", tags=["Empresas"])
-@router.delete("/{id_empresa}/", include_in_schema=False)
-@router.delete("/auth/empresas/{id_empresa}", include_in_schema=False)
-def eliminar_empresa(id_empresa: int, db: Session = Depends(get_db)):
-    """Elimina la empresa y sus registros contables en cascada."""
-    emp = db.query(models.Empresa).filter_by(id_empresa=id_empresa).first()
-    if not emp:
-        raise HTTPException(status_code=404, detail="Empresa no encontrada.")
-    
-    db.delete(emp)
-    db.commit()
-    print(f"\n---> [EMPRESA ELIMINADA] ID: {id_empresa}")
-    return {"status": "success", "success": True, "mensaje": "Empresa eliminada exitosamente."}
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error(f"Error al asignar empresas a id_usuario={id_usuario}: {str(exc)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al guardar la reasignación de permisos en la base de datos."
+        )
