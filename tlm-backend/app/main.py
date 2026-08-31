@@ -1,11 +1,24 @@
 import os
+import sys
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 # ===============================================================================
-# 1. NORMALIZACIÓN DE VARIABLE DE ENTORNO (POSTGRESQL NEON CLOUD / LOCAL)
+# 1. ANCLAJE RIGUROSO DE RUTAS Y SYS.PATH (COMPATIBILIDAD LINUX / RENDER)
+# ===============================================================================
+# Garantiza que el directorio raíz 'tlm-backend' sea la prioridad #1 de búsqueda
+CURRENT_FILE = Path(__file__).resolve()
+APP_DIR = CURRENT_FILE.parent               # .../tlm-backend/app
+PROJECT_ROOT = APP_DIR.parent              # .../tlm-backend
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# ===============================================================================
+# 2. NORMALIZACIÓN DE VARIABLE DE ENTORNO (POSTGRESQL NEON CLOUD / LOCAL)
 # ===============================================================================
 RAW_DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -21,21 +34,14 @@ else:
 os.environ["DATABASE_URL"] = DATABASE_URL
 
 # ===============================================================================
-# 2. IMPORTACIÓN DE CONTROLADORES REST (Soporte Híbrido Render / Local)
+# 3. IMPORTACIÓN ABSOLUTA DE CONTROLADORES REST
 # ===============================================================================
-try:
-    # Invocación estándar de paquete cuando Uvicorn ejecuta 'app.main:app'
-    from app.facturas import router as facturas_router
-    from app.empresas import router as empresas_router
-    from app.auth import router as auth_router
-except ImportError:
-    # Fallback relativo para ejecuciones locales de script directo
-    from .facturas import router as facturas_router
-    from .empresas import router as empresas_router
-    from .auth import router as auth_router
+from app.facturas import router as facturas_router
+from app.empresas import router as empresas_router
+from app.auth import router as auth_router
 
 # ===============================================================================
-# 3. INICIALIZACIÓN DEL NÚCLEO API ENGINE
+# 4. INICIALIZACIÓN DEL NÚCLEO API ENGINE
 # ===============================================================================
 app = FastAPI(
     title="Consola Fiscal B2B API Engine",
@@ -52,16 +58,14 @@ app.add_middleware(
 )
 
 # ===============================================================================
-# 4. RESOLUCIÓN DE RUTAS DEL FRONTEND Y ARCHIVOS ESTÁTICOS
+# 5. RESOLUCIÓN DE RUTAS DEL FRONTEND Y ARCHIVOS ESTÁTICOS
 # ===============================================================================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))               # /tlm-backend/app
-PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))        # /tlm-backend
-GLOBAL_ROOT = os.path.abspath(os.path.join(PROJECT_ROOT, ".."))     # Raíz del repositorio
+GLOBAL_ROOT = PROJECT_ROOT.parent
 
 POSSIBLE_FRONTEND_PATHS = [
     os.path.join(GLOBAL_ROOT, "tlm-frontend"),
     os.path.join(PROJECT_ROOT, "tlm-frontend"),
-    os.path.join(BASE_DIR, "static"),
+    os.path.join(APP_DIR, "static"),
 ]
 
 FRONTEND_DIR = next((path for path in POSSIBLE_FRONTEND_PATHS if os.path.isdir(path)), None)
@@ -84,7 +88,7 @@ async def serve_frontend():
     return {"status": "online", "message": "Consola Fiscal B2B API Engine operando. Frontend no montado."}
 
 # ===============================================================================
-# 5. MONITOREO DE INFRAESTRUCTURA (HEALTH CHECK)
+# 6. MONITOREO DE INFRAESTRUCTURA (HEALTH CHECK)
 # ===============================================================================
 @app.get("/health", tags=["Infraestructura"])
 def health_check():
@@ -99,7 +103,7 @@ def health_check():
     }
 
 # ===============================================================================
-# 6. REGISTRO DE CONTROLADORES REST (V1)
+# 7. REGISTRO DE CONTROLADORES REST (V1)
 # ===============================================================================
 app.include_router(facturas_router, prefix="/api/v1/facturas", tags=["Facturas & Motor ETL"])
 app.include_router(empresas_router, prefix="/api/v1/empresas", tags=["Empresas & Clientes"])
