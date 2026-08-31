@@ -1,6 +1,10 @@
+# ===============================================================================
+# ARCHIVO: tlm-backend/app/db/session.py
+# INFRAESTRUCTURA DE DATOS: GESTIÓN DE SESIONES, NEON SSL Y BASE DECLARATIVA
+# ===============================================================================
 import os
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, declarative_base
 
 # ===============================================================================
 # 1. RESOLUCIÓN DE VARIABLE DE ENTORNO (NEON CLOUD / LOCAL)
@@ -36,6 +40,14 @@ engine = create_engine(
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# ===============================================================================
+# 3. INSTANCIA DECLARATIVA BASE (REQUERIDA POR MODELS.PY)
+# ===============================================================================
+Base = declarative_base()
+
+# ===============================================================================
+# 4. INYECCIÓN DE DEPENDENCIA DE SESIÓN (FASTAPI)
+# ===============================================================================
 def get_db():
     """Generador de contexto de base de datos para inyección de dependencias."""
     db = SessionLocal()
