@@ -676,19 +676,22 @@ def eliminar_factura(id_factura: int, db: Session = Depends(get_db)):
     
     id_empresa = factura.id_empresa
     factura_num = factura.factura_num
-    cufe_base = factura.cufe_hash.split('_L')[0] if factura.cufe_hash else factura.cufe_hash
+    cufe_base = factura.cufe_hash.split('_L')[0] if hasattr(factura, 'cufe_hash') and factura.cufe_hash else factura.factura_num
     
-    db.query(models.Factura).filter(
-        models.Factura.id_empresa == id_empresa, 
-        models.Factura.cufe_hash.like(f"{cufe_base}%")
-    ).delete(synchronize_session=False)
+    if hasattr(models.Factura, 'cufe_hash'):
+        db.query(models.Factura).filter(
+            models.Factura.id_empresa == id_empresa, 
+            models.Factura.cufe_hash.like(f"{cufe_base}%")
+        ).delete(synchronize_session=False)
+    else:
+        db.delete(factura)
     
     lineas_restantes = db.query(models.Factura).filter(
         models.Factura.id_empresa == id_empresa,
         models.Factura.factura_num == factura_num
     ).count()
     
-    if lineas_restantes == 0:
+    if lineas_restantes == 0 and hasattr(models, 'SoportePDF'):
         db.query(models.SoportePDF).filter(
             models.SoportePDF.id_empresa == id_empresa,
             func.upper(func.trim(models.SoportePDF.factura_num)) == factura_num.strip().upper()
@@ -723,17 +726,18 @@ def borrado_masivo(payload: Union[List[int], dict] = Body(...), db: Session = De
 
         eliminados = db.query(models.Factura).filter(models.Factura.id_factura.in_(ids)).delete(synchronize_session=False)
 
-        for emp_id in empresa_ids:
-            for num in nums_facturas:
-                lineas_restantes = db.query(models.Factura).filter(
-                    models.Factura.id_empresa == emp_id,
-                    models.Factura.factura_num == num
-                ).count()
-                if lineas_restantes == 0:
-                    db.query(models.SoportePDF).filter(
-                        models.SoportePDF.id_empresa == emp_id,
-                        func.upper(func.trim(models.SoportePDF.factura_num)) == num.strip().upper()
-                    ).delete(synchronize_session=False)
+        if hasattr(models, 'SoportePDF'):
+            for emp_id in empresa_ids:
+                for num in nums_facturas:
+                    lineas_restantes = db.query(models.Factura).filter(
+                        models.Factura.id_empresa == emp_id,
+                        models.Factura.factura_num == num
+                    ).count()
+                    if lineas_restantes == 0:
+                        db.query(models.SoportePDF).filter(
+                            models.SoportePDF.id_empresa == emp_id,
+                            func.upper(func.trim(models.SoportePDF.factura_num)) == num.strip().upper()
+                        ).delete(synchronize_session=False)
 
         db.commit()
         return {"status": "success", "eliminados": eliminados}
@@ -809,9 +813,14 @@ async def procesar_comprobantes_masivos(
                                 nit_tercero = resultado_parsed["nit_tercero"]
 
                                 # VERIFICACIÓN PREVIA DE DUPLICADO
-                                if db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa, models.Factura.cufe_hash.like(f"{cufe_base}%")).first():
-                                    estadisticas["facturas_duplicadas"] += 1
-                                    continue
+                                if hasattr(models.Factura, 'cufe_hash'):
+                                    if db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa, models.Factura.cufe_hash.like(f"{cufe_base}%")).first():
+                                        estadisticas["facturas_duplicadas"] += 1
+                                        continue
+                                else:
+                                    if db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa, models.Factura.factura_num == factura_num).first():
+                                        estadisticas["facturas_duplicadas"] += 1
+                                        continue
 
                                 pdf_data_guardar = None
                                 
@@ -842,7 +851,7 @@ async def procesar_comprobantes_masivos(
                                 savepoint = db.begin_nested()
 
                                 # Persistencia atómica de SoportePDF
-                                if pdf_b64_final and factura_num:
+                                if pdf_b64_final and factura_num and hasattr(models, 'SoportePDF'):
                                     factura_num_clean = factura_num.strip().upper()
                                     if not db.query(models.SoportePDF).filter(
                                         models.SoportePDF.id_empresa == id_empresa,
@@ -856,24 +865,46 @@ async def procesar_comprobantes_masivos(
 
                                 for linea in lineas_dian:
                                     naturaleza = linea.pop("naturaleza", "EGRESO")
+                                    casilla_350_val = linea.pop("casilla_350", None)
+                                    cufe_val = linea.pop("cufe_hash", f"{cufe_base}_L1")
+                                    fecha_venc_val = linea.pop("fecha_vencimiento", linea.get("fecha"))
+
                                     prefijos_validos = ('4',) if naturaleza == "INGRESO" else ('14', '5', '6', '7')
                                     cuenta_asignada = "413524" if naturaleza == "INGRESO" else "51953001"
                                     
                                     if memoria_historica and memoria_historica.cuenta_gasto and str(memoria_historica.cuenta_gasto).startswith(prefijos_validos):
                                         cuenta_asignada = memoria_historica.cuenta_gasto
                                         linea["retencion_porc"] = memoria_historica.retencion_porc
-                                        linea["casilla_350"] = memoria_historica.casilla_350
                                     else:
                                         try:
-                                            saldos = db.query(models.BalanceTercero).filter(models.BalanceTercero.id_empresa == id_empresa, models.BalanceTercero.nit_tercero == nit_tercero).all()
-                                            for s in saldos:
-                                                if s.cuenta_contable and str(s.cuenta_contable).startswith(prefijos_validos):
-                                                    cuenta_asignada = s.cuenta_contable
-                                                    break
+                                            model_bal = getattr(models, 'BalanceTercero', getattr(models, 'BalancePruebaModel', None))
+                                            if model_bal:
+                                                saldos = db.query(model_bal).filter(model_bal.id_empresa == id_empresa, model_bal.nit_tercero == nit_tercero).all()
+                                                for s in saldos:
+                                                    cta = getattr(s, 'cuenta_contable', getattr(s, 'codigo_cuenta', ''))
+                                                    if cta and str(cta).startswith(prefijos_validos):
+                                                        cuenta_asignada = cta
+                                                        break
                                         except Exception: 
                                             pass
 
-                                    db.add(models.Factura(id_empresa=id_empresa, **linea, cuenta_gasto=cuenta_asignada, estado_revision="PENDIENTE"))
+                                    m_factura_kwargs = {
+                                        "id_empresa": id_empresa,
+                                        "cuenta_gasto": cuenta_asignada,
+                                        **linea
+                                    }
+                                    if hasattr(models.Factura, 'cufe_hash'):
+                                        m_factura_kwargs["cufe_hash"] = cufe_val
+                                    if hasattr(models.Factura, 'casilla_350'):
+                                        m_factura_kwargs["casilla_350"] = casilla_350_val
+                                    if hasattr(models.Factura, 'fecha_vencimiento'):
+                                        m_factura_kwargs["fecha_vencimiento"] = fecha_venc_val
+                                    if hasattr(models.Factura, 'estado_revision'):
+                                        m_factura_kwargs["estado_revision"] = "PENDIENTE"
+                                    if hasattr(models.Factura, 'pdf_b64') and pdf_b64_final:
+                                        m_factura_kwargs["pdf_b64"] = pdf_b64_final
+
+                                    db.add(models.Factura(**m_factura_kwargs))
                                 
                                 savepoint.commit()
                                 estadisticas["facturas_procesadas"] += 1
@@ -894,13 +925,18 @@ async def procesar_comprobantes_masivos(
                         factura_num = str(resultado_parsed["factura_num"]).strip().upper()
                         nit_tercero = resultado_parsed["nit_tercero"]
 
-                        if db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa, models.Factura.cufe_hash.like(f"{cufe_base}%")).first():
-                            estadisticas["facturas_duplicadas"] += 1
-                            continue
+                        if hasattr(models.Factura, 'cufe_hash'):
+                            if db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa, models.Factura.cufe_hash.like(f"{cufe_base}%")).first():
+                                estadisticas["facturas_duplicadas"] += 1
+                                continue
+                        else:
+                            if db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa, models.Factura.factura_num == factura_num).first():
+                                estadisticas["facturas_duplicadas"] += 1
+                                continue
 
                         savepoint = db.begin_nested()
 
-                        if resultado_parsed["pdf_b64"]:
+                        if resultado_parsed["pdf_b64"] and hasattr(models, 'SoportePDF'):
                             if not db.query(models.SoportePDF).filter(models.SoportePDF.id_empresa == id_empresa, func.upper(func.trim(models.SoportePDF.factura_num)) == factura_num).first():
                                 db.add(models.SoportePDF(id_empresa=id_empresa, factura_num=factura_num, pdf_b64=resultado_parsed["pdf_b64"]))
                                 estadisticas["soportes_pdf_guardados"] += 1
@@ -909,24 +945,46 @@ async def procesar_comprobantes_masivos(
 
                         for linea in lineas_dian:
                             naturaleza = linea.pop("naturaleza", "EGRESO")
+                            casilla_350_val = linea.pop("casilla_350", None)
+                            cufe_val = linea.pop("cufe_hash", f"{cufe_base}_L1")
+                            fecha_venc_val = linea.pop("fecha_vencimiento", linea.get("fecha"))
+
                             prefijos_validos = ('4',) if naturaleza == "INGRESO" else ('14', '5', '6', '7')
                             cuenta_asignada = "413524" if naturaleza == "INGRESO" else "51953001"
                             
                             if memoria_historica and memoria_historica.cuenta_gasto and str(memoria_historica.cuenta_gasto).startswith(prefijos_validos):
                                 cuenta_asignada = memoria_historica.cuenta_gasto
                                 linea["retencion_porc"] = memoria_historica.retencion_porc
-                                linea["casilla_350"] = memoria_historica.casilla_350
                             else:
                                 try:
-                                    saldos = db.query(models.BalanceTercero).filter(models.BalanceTercero.id_empresa == id_empresa, models.BalanceTercero.nit_tercero == nit_tercero).all()
-                                    for s in saldos:
-                                        if s.cuenta_contable and str(s.cuenta_contable).startswith(prefijos_validos):
-                                            cuenta_asignada = s.cuenta_contable
-                                            break
+                                    model_bal = getattr(models, 'BalanceTercero', getattr(models, 'BalancePruebaModel', None))
+                                    if model_bal:
+                                        saldos = db.query(model_bal).filter(model_bal.id_empresa == id_empresa, model_bal.nit_tercero == nit_tercero).all()
+                                        for s in saldos:
+                                            cta = getattr(s, 'cuenta_contable', getattr(s, 'codigo_cuenta', ''))
+                                            if cta and str(cta).startswith(prefijos_validos):
+                                                cuenta_asignada = cta
+                                                break
                                 except Exception: 
                                     pass
 
-                            db.add(models.Factura(id_empresa=id_empresa, **linea, cuenta_gasto=cuenta_asignada, estado_revision="PENDIENTE"))
+                            m_factura_kwargs = {
+                                "id_empresa": id_empresa,
+                                "cuenta_gasto": cuenta_asignada,
+                                **linea
+                            }
+                            if hasattr(models.Factura, 'cufe_hash'):
+                                m_factura_kwargs["cufe_hash"] = cufe_val
+                            if hasattr(models.Factura, 'casilla_350'):
+                                m_factura_kwargs["casilla_350"] = casilla_350_val
+                            if hasattr(models.Factura, 'fecha_vencimiento'):
+                                m_factura_kwargs["fecha_vencimiento"] = fecha_venc_val
+                            if hasattr(models.Factura, 'estado_revision'):
+                                m_factura_kwargs["estado_revision"] = "PENDIENTE"
+                            if hasattr(models.Factura, 'pdf_b64') and resultado_parsed["pdf_b64"]:
+                                m_factura_kwargs["pdf_b64"] = resultado_parsed["pdf_b64"]
+
+                            db.add(models.Factura(**m_factura_kwargs))
                         savepoint.commit()
                         estadisticas["facturas_procesadas"] += 1
                 except Exception:
@@ -935,16 +993,18 @@ async def procesar_comprobantes_masivos(
             elif nombre_archivo.endswith('.pdf'):
                 factura_num = nombre_archivo.replace('.pdf', '').upper().strip()
                 pdf_b64 = base64.b64encode(contenido_binario).decode('utf-8')
-                savepoint = db.begin_nested()
-                try:
-                    if not db.query(models.SoportePDF).filter(models.SoportePDF.id_empresa == id_empresa, func.upper(func.trim(models.SoportePDF.factura_num)) == factura_num).first():
-                        db.add(models.SoportePDF(id_empresa=id_empresa, factura_num=factura_num, pdf_b64=pdf_b64))
-                        savepoint.commit()
-                        estadisticas["soportes_pdf_guardados"] += 1
-                    else: 
+                
+                if hasattr(models, 'SoportePDF'):
+                    savepoint = db.begin_nested()
+                    try:
+                        if not db.query(models.SoportePDF).filter(models.SoportePDF.id_empresa == id_empresa, func.upper(func.trim(models.SoportePDF.factura_num)) == factura_num).first():
+                            db.add(models.SoportePDF(id_empresa=id_empresa, factura_num=factura_num, pdf_b64=pdf_b64))
+                            savepoint.commit()
+                            estadisticas["soportes_pdf_guardados"] += 1
+                        else: 
+                            savepoint.rollback()
+                    except Exception: 
                         savepoint.rollback()
-                except Exception: 
-                    savepoint.rollback()
 
         db.commit()
         return estadisticas
@@ -960,10 +1020,16 @@ async def subir_puc(id_empresa: int = Form(...), archivo: UploadFile = File(...)
         if not empresa: 
             raise HTTPException(status_code=404, detail="Empresa no encontrada")
         datos_puc = parsear_puc_siigo_pyme(await archivo.read())
-        db.query(models.CuentaPUC).filter(models.CuentaPUC.id_empresa == id_empresa).delete(synchronize_session=False)
-        for row in datos_puc: 
-            db.add(models.CuentaPUC(id_empresa=id_empresa, cuenta=row['CUENTA'], nombre=row['NOMBRE']))
-        db.commit()
+        
+        model_puc = getattr(models, 'CuentaPUC', getattr(models, 'PUCModel', None))
+        if model_puc:
+            db.query(model_puc).filter(model_puc.id_empresa == id_empresa).delete(synchronize_session=False)
+            for row in datos_puc: 
+                if hasattr(model_puc, 'cuenta'):
+                    db.add(model_puc(id_empresa=id_empresa, cuenta=row['CUENTA'], nombre=row['NOMBRE']))
+                else:
+                    db.add(model_puc(id_empresa=id_empresa, codigo_cuenta=row['CUENTA'], nombre_cuenta=row['NOMBRE']))
+            db.commit()
         return {"status": "success", "registros_procesados": len(datos_puc), "mensaje": "PUC actualizado."}
     except Exception as e: 
         db.rollback()
@@ -977,10 +1043,24 @@ async def subir_balance(id_empresa: int = Form(...), archivo: UploadFile = File(
         if not empresa: 
             raise HTTPException(status_code=404, detail="Empresa no encontrada")
         datos_balance = parsear_balance_siigo_pyme(await archivo.read())
-        db.query(models.BalanceTercero).filter(models.BalanceTercero.id_empresa == id_empresa).delete(synchronize_session=False)
-        for row in datos_balance: 
-            db.add(models.BalanceTercero(id_empresa=id_empresa, **row))
-        db.commit()
+        
+        model_bal = getattr(models, 'BalanceTercero', getattr(models, 'BalancePruebaModel', None))
+        if model_bal:
+            db.query(model_bal).filter(model_bal.id_empresa == id_empresa).delete(synchronize_session=False)
+            for row in datos_balance: 
+                if hasattr(model_bal, 'cuenta_contable'):
+                    db.add(model_bal(id_empresa=id_empresa, **row))
+                else:
+                    db.add(model_bal(
+                        id_empresa=id_empresa, 
+                        codigo_cuenta=row.get('cuenta_contable', ''), 
+                        nombre_cuenta=row.get('nombre_cuenta', ''),
+                        saldo_inicial=row.get('saldo_inicial', 0.0),
+                        debitos=row.get('debitos', 0.0),
+                        creditos=row.get('creditos', 0.0),
+                        saldo_final=row.get('saldo_final', 0.0)
+                    ))
+            db.commit()
         return {"status": "success", "registros_procesados": len(datos_balance), "mensaje": "Saldos actualizados."}
     except Exception as e: 
         db.rollback()
@@ -990,8 +1070,11 @@ async def subir_balance(id_empresa: int = Form(...), archivo: UploadFile = File(
 @router.delete("/puc/borrar", summary="Purgar Catálogo PUC")
 def purgar_puc(id_empresa: int, db: Session = Depends(get_db)):
     try:
-        eliminados = db.query(models.CuentaPUC).filter(models.CuentaPUC.id_empresa == id_empresa).delete(synchronize_session=False)
-        db.commit()
+        model_puc = getattr(models, 'CuentaPUC', getattr(models, 'PUCModel', None))
+        eliminados = 0
+        if model_puc:
+            eliminados = db.query(model_puc).filter(model_puc.id_empresa == id_empresa).delete(synchronize_session=False)
+            db.commit()
         return {"status": "success", "mensaje": f"Se eliminaron {eliminados} cuentas."}
     except Exception as e: 
         db.rollback()
@@ -1001,8 +1084,11 @@ def purgar_puc(id_empresa: int, db: Session = Depends(get_db)):
 @router.delete("/balance/borrar", summary="Purgar Balance de Prueba")
 def purgar_balance(id_empresa: int, db: Session = Depends(get_db)):
     try:
-        eliminados = db.query(models.BalanceTercero).filter(models.BalanceTercero.id_empresa == id_empresa).delete(synchronize_session=False)
-        db.commit()
+        model_bal = getattr(models, 'BalanceTercero', getattr(models, 'BalancePruebaModel', None))
+        eliminados = 0
+        if model_bal:
+            eliminados = db.query(model_bal).filter(model_bal.id_empresa == id_empresa).delete(synchronize_session=False)
+            db.commit()
         return {"status": "success", "mensaje": f"Se eliminaron {eliminados} saldos."}
     except Exception as e: 
         db.rollback()
@@ -1037,14 +1123,22 @@ def actualizar_retencion(id_factura: int, payload: RetencionUpdate, db: Session 
         if payload.aplicar_a_proveedor and payload.nit_tercero:
             facturas = db.query(models.Factura).filter(models.Factura.id_empresa == payload.id_empresa, models.Factura.nit_tercero == payload.nit_tercero).all()
             for f in facturas: 
-                f.retencion_porc = payload.retencion_porc; f.casilla_350 = casilla_imputada
+                f.retencion_porc = payload.retencion_porc
+                if hasattr(f, 'casilla_350'):
+                    f.casilla_350 = casilla_imputada
+                if hasattr(f, 'retencion_valor'):
+                    f.retencion_valor = (f.subtotal or 0.0) * (payload.retencion_porc / 100.0)
             db.commit()
             return {"status": "success"}
         else:
             factura = db.query(models.Factura).filter(models.Factura.id_factura == id_factura).first()
             if not factura: 
                 raise HTTPException(status_code=404, detail="Línea no encontrada.")
-            factura.retencion_porc = payload.retencion_porc; factura.casilla_350 = casilla_imputada
+            factura.retencion_porc = payload.retencion_porc
+            if hasattr(factura, 'casilla_350'):
+                factura.casilla_350 = casilla_imputada
+            if hasattr(factura, 'retencion_valor'):
+                factura.retencion_valor = (factura.subtotal or 0.0) * (payload.retencion_porc / 100.0)
             db.commit()
             return {"status": "success"}
     except Exception as e: 
@@ -1058,14 +1152,23 @@ def obtener_pdf(
     id_empresa: Optional[int] = None, 
     db: Session = Depends(get_db)
 ):
-    query = db.query(models.SoportePDF).filter(func.upper(func.trim(models.SoportePDF.factura_num)) == factura_num.strip().upper())
-    if id_empresa:
-        query = query.filter(models.SoportePDF.id_empresa == id_empresa)
-    
-    soporte = query.first()
-    if not soporte: 
-        raise HTTPException(status_code=404, detail="Soporte PDF no disponible.")
-    return {"factura_num": soporte.factura_num, "pdf_b64": soporte.pdf_b64}
+    if hasattr(models, 'SoportePDF'):
+        query = db.query(models.SoportePDF).filter(func.upper(func.trim(models.SoportePDF.factura_num)) == factura_num.strip().upper())
+        if id_empresa:
+            query = query.filter(models.SoportePDF.id_empresa == id_empresa)
+        soporte = query.first()
+        if soporte and soporte.pdf_b64:
+            return {"factura_num": soporte.factura_num, "pdf_b64": soporte.pdf_b64}
+
+    if hasattr(models.Factura, 'pdf_b64'):
+        query_f = db.query(models.Factura).filter(func.upper(func.trim(models.Factura.factura_num)) == factura_num.strip().upper())
+        if id_empresa:
+            query_f = query_f.filter(models.Factura.id_empresa == id_empresa)
+        factura = query_f.first()
+        if factura and factura.pdf_b64:
+            return {"factura_num": factura.factura_num, "pdf_b64": factura.pdf_b64}
+
+    raise HTTPException(status_code=404, detail="Soporte PDF no disponible.")
 
 
 @router.post("/export/soportes-pdf", summary="Exportar PDFs Únicos por Comprobante con Nomenclatura Secuencial")
@@ -1095,11 +1198,12 @@ def exportar_soportes_zip(payload: SoporteExportRequest, db: Session = Depends(g
             if num_clean not in mapa_comprobantes_unicos:
                 mapa_comprobantes_unicos[num_clean] = f
 
-        soportes_db = db.query(models.SoportePDF).filter(
-            models.SoportePDF.id_empresa == payload.id_empresa
-        ).all()
-
-        mapa_soportes = {str(s.factura_num).strip().upper(): s.pdf_b64 for s in soportes_db if s.pdf_b64}
+        mapa_soportes = {}
+        if hasattr(models, 'SoportePDF'):
+            soportes_db = db.query(models.SoportePDF).filter(
+                models.SoportePDF.id_empresa == payload.id_empresa
+            ).all()
+            mapa_soportes = {str(s.factura_num).strip().upper(): s.pdf_b64 for s in soportes_db if s.pdf_b64}
 
         zip_buffer = io.BytesIO()
 
@@ -1112,6 +1216,12 @@ def exportar_soportes_zip(payload: SoporteExportRequest, db: Session = Depends(g
                 if num_clean in mapa_soportes:
                     try:
                         pdf_bytes = base64.b64decode(mapa_soportes[num_clean])
+                    except Exception:
+                        pdf_bytes = None
+
+                if not pdf_bytes and hasattr(f, 'pdf_b64') and f.pdf_b64:
+                    try:
+                        pdf_bytes = base64.b64decode(f.pdf_b64)
                     except Exception:
                         pdf_bytes = None
 
@@ -1162,11 +1272,20 @@ def exportar_excel_auditoria(
         raise HTTPException(status_code=404, detail="No hay datos registrados para exportar.")
         
     data_detalle = [{
-        "Fecha Emisión": f.fecha, "Fecha Vencimiento": f.fecha_vencimiento, "Factura N°": f.factura_num, 
-        "NIT Tercero": f.nit_tercero, "Razón Social": f.proveedor, "Ítem / Servicio": f.descripcion_item, 
-        "Cuenta Contable": f.cuenta_gasto, "Cantidad": f.cantidad or 1.0, "Valor Unitario": f.valor_unitario or 0.0, 
-        "Subtotal Línea": f.subtotal or 0.0, "IVA Línea": f.iva or 0.0, "Total Línea": (f.subtotal or 0) + (f.iva or 0), 
-        "Forma de Pago": f.forma_pago, "% RteFte Asignado": f.retencion_porc or 0.0
+        "Fecha Emisión": f.fecha, 
+        "Fecha Vencimiento": getattr(f, 'fecha_vencimiento', f.fecha), 
+        "Factura N°": f.factura_num, 
+        "NIT Tercero": f.nit_tercero, 
+        "Razón Social": f.proveedor, 
+        "Ítem / Servicio": f.descripcion_item, 
+        "Cuenta Contable": f.cuenta_gasto, 
+        "Cantidad": f.cantidad or 1.0, 
+        "Valor Unitario": f.valor_unitario or 0.0, 
+        "Subtotal Línea": f.subtotal or 0.0, 
+        "IVA Línea": f.iva or 0.0, 
+        "Total Línea": (f.subtotal or 0) + (f.iva or 0), 
+        "Forma de Pago": f.forma_pago, 
+        "% RteFte Asignado": f.retencion_porc or 0.0
     } for f in facturas]
     
     df_detalle = pd.DataFrame(data_detalle)
@@ -1240,10 +1359,19 @@ def obtener_kpis(
     if ingresos > 0:
         margen_bruto = round(((ingresos - egresos) / ingresos) * 100, 1)
 
-    retefuente = sum(f.subtotal * ((f.retencion_porc or 0) / 100) for f in facturas if f.subtotal and f.cuenta_gasto and str(f.cuenta_gasto).startswith(('14', '5', '6', '7')))
-    cufe_unicos = set(f.cufe_hash.split('_L')[0] for f in facturas if f.cufe_hash)
+    retefuente = sum(
+        (f.retencion_valor if hasattr(f, 'retencion_valor') and f.retencion_valor else f.subtotal * ((f.retencion_porc or 0) / 100))
+        for f in facturas if f.subtotal and f.cuenta_gasto and str(f.cuenta_gasto).startswith(('14', '5', '6', '7'))
+    )
     
-    return {"ingresos_totales": ingresos, "egresos_totales": egresos, "margen_bruto_porcentaje": margen_bruto, "total_retefuente_f350": retefuente, "total_comprobantes": len(cufe_unicos)}
+    if hasattr(models.Factura, 'cufe_hash'):
+        cufe_unicos = set(f.cufe_hash.split('_L')[0] for f in facturas if f.cufe_hash)
+        total_docs = len(cufe_unicos)
+    else:
+        facturas_unicas = set(f.factura_num for f in facturas if f.factura_num)
+        total_docs = len(facturas_unicas)
+    
+    return {"ingresos_totales": ingresos, "egresos_totales": egresos, "margen_bruto_porcentaje": margen_bruto, "total_retefuente_f350": retefuente, "total_comprobantes": total_docs}
 
 
 @router.get("/impuestos/f350", summary="Liquidación Retenciones")
@@ -1263,9 +1391,9 @@ def obtener_f350(
     for f in facturas:
         if f.cuenta_gasto and str(f.cuenta_gasto).startswith(('14', '5', '6', '7')):
             if f.retencion_porc and f.retencion_porc > 0 and f.subtotal:
-                retencion = f.subtotal * (f.retencion_porc / 100)
+                retencion = (f.retencion_valor if hasattr(f, 'retencion_valor') and f.retencion_valor else f.subtotal * (f.retencion_porc / 100))
                 total_retefuente += retencion
-                c_key = str(f.casilla_350 or 64)
+                c_key = str(getattr(f, 'casilla_350', 64) or 64)
                 if c_key not in casillas: 
                     casillas[c_key] = {"concepto": f"Base Gravable Casilla {c_key}", "base": 0.0, "retencion": 0.0}
                 casillas[c_key]["base"] += f.subtotal; casillas[c_key]["retencion"] += retencion
