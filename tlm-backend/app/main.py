@@ -6,14 +6,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 # ===============================================================================
-# 1. NORMALIZACIÓN DE ENTORNO Y CONEXIÓN A BASE DE DATOS (NEON / LOCAL)
+# 1. ENTORNO Y BASE DE DATOS (NEON CLOUD / LOCAL)
 # ===============================================================================
 RAW_DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:postgres@127.0.0.1:5432/tlm_workspace"
 )
 
-# Corrección de protocolo para compatibilidad con SQLAlchemy (postgres:// -> postgresql://)
 if RAW_DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = RAW_DATABASE_URL.replace("postgres://", "postgresql://", 1)
 else:
@@ -22,14 +21,26 @@ else:
 os.environ["DATABASE_URL"] = DATABASE_URL
 
 # ===============================================================================
-# 2. IMPORTACIONES ABSOLUTAS OFICIALES (Compatibilidad limpia con VS Code y Render)
+# 2. RESOLUCIÓN DINÁMICA DE RUTAS (Soporte Multiplataforma Windows/Linux)
 # ===============================================================================
-# ===============================================================================
-# 2. IMPORTACIONES ABSOLUTAS (Con directiva de supresión de falso positivo # type: ignore)
-# ===============================================================================
-from app.facturas import router as facturas_router  # type: ignore
-from app.empresas import router as empresas_router  # type: ignore
-from app.auth import router as auth_router          # type: ignore
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))               # Ruta de /app
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))        # Ruta de /tlm-backend
+
+# Inyección de rutas de búsqueda en sys.path para Render y Uvicorn
+for path in [PROJECT_ROOT, BASE_DIR]:
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+# Carga híbrida tolerante a estructura de módulos
+try:
+    from app.facturas import router as facturas_router
+    from app.empresas import router as empresas_router
+    from app.auth import router as auth_router
+except ModuleNotFoundError:
+    from facturas import router as facturas_router
+    from empresas import router as empresas_router
+    from auth import router as auth_router
+
 # ===============================================================================
 # 3. INICIALIZACIÓN DEL NÚCLEO API ENGINE
 # ===============================================================================
@@ -51,11 +62,9 @@ app.add_middleware(
 )
 
 # ===============================================================================
-# 5. MONTAJE DE RECURSOS ESTÁTICOS Y SERVIDO DEL FRONTEND (INDEX.HTML)
+# 5. MONTAJE DE RECURSOS ESTÁTICOS Y FRONTEND
 # ===============================================================================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))               # Ubicación de /app
-PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))        # Ubicación de /tlm-backend
-GLOBAL_ROOT = os.path.abspath(os.path.join(PROJECT_ROOT, ".."))     # Raíz del repositorio
+GLOBAL_ROOT = os.path.abspath(os.path.join(PROJECT_ROOT, ".."))
 
 POSSIBLE_FRONTEND_PATHS = [
     os.path.join(GLOBAL_ROOT, "tlm-frontend"),
@@ -87,7 +96,7 @@ async def serve_frontend():
 # ===============================================================================
 @app.get("/health", tags=["Infraestructura"])
 def health_check():
-    """Endpoint de auditoría para verificación de SLA y conectividad de base de datos."""
+    """Endpoint de auditoría técnica."""
     is_cloud_db = "neon.tech" in os.getenv("DATABASE_URL", "")
     return {
         "status": "healthy",
