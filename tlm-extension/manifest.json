@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "TLM Sync Engine",
+  "version": "1.0",
+  "description": "Extractor de facturas DIAN para Consola TLM",
+  "permissions": ["cookies", "activeTab", "scripting"],
+  "host_permissions": [
+    "https://catalogo-vpfe.dian.gov.co/*",
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "*://127.0.0.1/*",
+      "*://localhost/*"
+    ]
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

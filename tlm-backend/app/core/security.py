@@ -1,0 +1,1 @@
+# Módulo reservado para manejo de hashing de contraseñas y tokens JWT

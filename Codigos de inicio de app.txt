@@ -1,0 +1,12 @@
+.\.venv\Scripts\activate
+python -m uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+
+http://localhost:8001
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+
+
+ngrok http --domain=unless-playback-rerun.ngrok-free.dev 8000
+
+

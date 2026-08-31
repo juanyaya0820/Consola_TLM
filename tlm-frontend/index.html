@@ -1,0 +1,1582 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Consola TLM - Gestión Fiscal Avanzada</title>
+    <!-- Framework de Estilos -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: { 
+                    colors: { 
+                        tlm: { 
+                            sidebar: '#211A5C', 
+                            sidebarHover: '#2F2768', 
+                            primary: '#271A82', 
+                            accent: '#F37A20', 
+                            bg: '#F8F9FA' 
+                        } 
+                    } 
+                }
+            }
+        }
+    </script>
+    <!-- Iconografía Ejecutiva -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- LIBRERÍA DE ANÁLISIS GRÁFICO -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-tlm-bg font-sans antialiased h-screen flex overflow-hidden" onclick="cerrarMenuEmpresasFuera(event)">
+
+    <!-- BARRA LATERAL NAVEGACIÓN -->
+    <aside class="w-64 bg-tlm-sidebar text-white flex flex-col justify-between shadow-xl z-20">
+        <div>
+            <div class="p-6 border-b border-indigo-900/50 flex items-center gap-3">
+                <div class="bg-tlm-accent p-2 rounded-lg text-white font-bold text-xl shadow-lg">🛡️</div>
+                <div>
+                    <h1 class="font-bold text-lg leading-none">Consola TLM</h1>
+                    <span class="text-xs text-indigo-300 font-medium">Gestión Fiscal B2B</span>
+                </div>
+            </div>
+            <nav class="p-4 space-y-2">
+                <button onclick="cambiarSeccion('dashboard')" id="nav-dashboard" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-tlm-accent text-white font-semibold active:scale-95 transition-all shadow-md">
+                    <i class="fa-solid fa-chart-pie w-5"></i><span>Dashboard Directivo</span>
+                </button>
+                <button onclick="cambiarSeccion('facturas')" id="nav-facturas" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-tlm-sidebarHover text-indigo-200 hover:text-white font-medium active:scale-95 transition-all">
+                    <i class="fa-solid fa-file-invoice-dollar w-5"></i><span>Cargue y Auditoría</span>
+                </button>
+                <button onclick="cambiarSeccion('centro-fiscal')" id="nav-centro-fiscal" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-tlm-sidebarHover text-indigo-200 hover:text-white font-medium active:scale-95 transition-all">
+                    <i class="fa-solid fa-landmark w-5"></i><span>Centro Fiscal (F350)</span>
+                </button>
+                <button onclick="cambiarSeccion('conciliacion')" id="nav-conciliacion" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-tlm-sidebarHover text-indigo-200 hover:text-white font-medium active:scale-95 transition-all">
+                    <i class="fa-solid fa-building-columns w-5"></i><span>Conciliación Bancaria</span>
+                </button>
+                <button onclick="cambiarSeccion('cerebro')" id="nav-cerebro" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-tlm-sidebarHover text-indigo-200 hover:text-white font-medium active:scale-95 transition-all">
+                    <i class="fa-solid fa-brain w-5"></i><span>Cerebro Contable</span>
+                </button>
+                <button onclick="cambiarSeccion('accesos')" id="nav-accesos" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-tlm-sidebarHover text-indigo-200 hover:text-white font-medium active:scale-95 transition-all hidden">
+                    <i class="fa-solid fa-user-shield w-5"></i><span>Gestión de Usuarios</span>
+                </button>
+            </nav>
+        </div>
+        <div class="p-4 border-t border-indigo-900/50 space-y-2">
+            <button onclick="gestionarSesionUsuario()" id="btn-login-status" class="w-full bg-indigo-950/80 hover:bg-indigo-900 p-2.5 rounded-xl flex items-center justify-between text-xs text-indigo-200 font-semibold transition border border-indigo-800 active:scale-95">
+                <span id="user-display">👤 Iniciar Sesión</span>
+                <i id="user-icon-action" class="fa-solid fa-right-to-bracket"></i>
+            </button>
+            <div class="bg-indigo-950/60 p-2.5 rounded-xl flex items-center justify-between text-xs">
+                <span class="text-indigo-300">API PostgreSQL:</span>
+                <span id="api-status" class="flex items-center gap-1.5 font-bold text-amber-400">
+                    <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span> Conectando...
+                </span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ÁREA PRINCIPAL DE TRABAJO -->
+    <main id="main-content" class="flex-1 flex flex-col overflow-y-auto hidden relative z-10">
+        <!-- ENCABEZADO PRINCIPAL -->
+        <header class="bg-white border-b border-gray-200 px-8 py-3.5 flex justify-between items-center shadow-sm relative z-30">
+            <div>
+                <h2 id="page-title" class="text-2xl font-bold text-gray-800">Dashboard Directivo</h2>
+                <div class="flex items-center gap-2 mt-0.5">
+                    <span class="text-xs text-gray-400">Motor de Análisis Financiero UBL 2.1</span>
+                    <span id="badge-entorno-activo" class="hidden bg-emerald-50 text-emerald-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1.5">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                        <span>Entorno Activo:</span>
+                        <span id="badge-nombre-empresa" class="font-black">Sin Entorno</span>
+                    </span>
+                </div>
+            </div>
+
+            <!-- SELECTOR EJECUTIVO DE EMPRESAS -->
+            <div class="flex items-center gap-4">
+                <div class="relative" id="container-empresa-selector">
+                    <button onclick="toggleMenuEmpresas(event)" id="btn-empresa-selector" class="bg-gray-50 hover:bg-gray-100 border border-gray-200 p-2 pl-3 pr-4 rounded-xl flex items-center gap-3 transition-all active:scale-95 shadow-sm text-left">
+                        <div id="header-empresa-logo" class="w-8 h-8 rounded-lg bg-tlm-primary text-white font-bold text-xs flex items-center justify-center shadow-sm overflow-hidden flex-shrink-0">🏢</div>
+                        <div class="leading-tight">
+                            <span id="header-empresa-nombre" class="block font-bold text-xs text-gray-800 truncate max-w-[180px]">Seleccionar Cliente</span>
+                            <span id="header-empresa-nit" class="block text-[10px] text-gray-400 font-mono">NIT: ---------</span>
+                        </div>
+                        <i class="fa-solid fa-chevron-down text-xs text-gray-400 ml-1 transition-transform duration-200" id="icon-chevron-empresa"></i>
+                    </button>
+
+                    <div id="dropdown-empresa-menu" class="hidden absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-gray-100 p-3 space-y-2 z-50 transition-all">
+                        <div class="flex items-center justify-between px-2 pt-1 pb-2 border-b border-gray-100">
+                            <span class="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Entornos Disponibles</span>
+                            <button onclick="abrirModalNuevaEmpresa()" class="text-tlm-primary hover:text-indigo-900 text-xs font-bold flex items-center gap-1 bg-indigo-50 px-2 py-1 rounded-lg transition"><i class="fa-solid fa-plus text-[10px]"></i> Nuevo Cliente</button>
+                        </div>
+                        <div class="relative">
+                            <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-xs"></i>
+                            <input type="text" id="filtro-empresas-list" onkeyup="filtrarListaEmpresasDropdown()" placeholder="Buscar por cliente o NIT..." class="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-semibold focus:outline-none focus:border-tlm-primary">
+                        </div>
+                        <div id="lista-empresas-items" class="max-h-60 overflow-y-auto space-y-1 pr-1"><p class="text-xs text-center text-gray-400 py-4">Cargando portafolio...</p></div>
+                    </div>
+                </div>
+                <div class="w-10 h-10 rounded-full bg-tlm-primary text-white flex items-center justify-center font-bold shadow-md">TLM</div>
+            </div>
+        </header>
+
+        <div class="p-8 space-y-6">
+            
+            <div id="banner-sin-empresas" class="hidden bg-amber-50 border-2 border-amber-200 rounded-2xl p-6 text-amber-900 space-y-3 shadow-sm">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold text-lg"><i class="fa-solid fa-user-lock"></i></div>
+                    <div><h3 class="font-bold text-base">Aún no tienes empresas asignadas a tu cuenta</h3><p class="text-xs text-amber-700">Para comenzar a operar en la plataforma tienes dos opciones:</p></div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                    <div class="bg-white p-4 rounded-xl border border-amber-200"><p class="font-bold text-xs text-gray-800">1. Solicitar Permisos</p><p class="text-xs text-gray-500 mt-1">Pide al Administrador del sistema que asigne las empresas correspondientes a tu usuario.</p></div>
+                    <div class="bg-white p-4 rounded-xl border border-amber-200 flex flex-col justify-between">
+                        <div><p class="font-bold text-xs text-gray-800">2. Crear un Cliente Nuevo</p><p class="text-xs text-gray-500 mt-1">Si creas tu propio cliente, quedarás vinculado como su gestor automáticamente.</p></div>
+                        <button onclick="abrirModalNuevaEmpresa()" class="mt-3 bg-tlm-primary text-white text-xs font-bold py-2 px-4 rounded-lg self-start active:scale-95 transition"><i class="fa-solid fa-plus mr-1"></i> Crear Mi Primer Cliente</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VISTA 1: DASHBOARD DIRECTIVO + GRÁFICOS ANALÍTICOS -->
+            <section id="sec-dashboard" class="space-y-6">
+                <!-- Tarjetas KPI -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center">
+                        <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Ingresos Totales</p>
+                        <h3 id="kpi-ingresos" class="text-2xl font-black text-emerald-600 mt-1">$0</h3>
+                        <span class="inline-block mt-3 text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2.5 py-1 rounded w-max">▲ Facturación Emitida</span>
+                    </div>
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center border-l-4 border-l-rose-500">
+                        <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Gastos / Compras</p>
+                        <h3 id="kpi-egresos" class="text-2xl font-black text-rose-600 mt-1">$0</h3>
+                        <span class="inline-block mt-3 text-[10px] text-rose-600 font-bold bg-rose-50 px-2.5 py-1 rounded w-max">▼ Egresos Deducibles</span>
+                    </div>
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center">
+                        <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Margen Bruto</p>
+                        <h3 id="kpi-margen" class="text-2xl font-black text-tlm-primary mt-1">0%</h3>
+                        <span class="inline-block mt-3 text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2.5 py-1 rounded w-max">Utilidad Bruta Operativa</span>
+                    </div>
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center border-l-4 border-l-tlm-accent">
+                        <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Retefuente F350</p>
+                        <h3 id="kpi-retefuente" class="text-2xl font-black text-gray-800 mt-1">$0</h3>
+                        <span class="inline-block mt-3 text-[10px] text-amber-600 font-bold bg-amber-50 px-2.5 py-1 rounded w-max">Impuesto Retenido a Terceros</span>
+                    </div>
+                </div>
+
+                <!-- SECCIÓN DE GRÁFICOS ANALÍTICOS DUALES -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                        <div class="flex justify-between items-center mb-4">
+                            <h4 class="font-bold text-gray-800">Evolución de Ingresos y Egresos</h4>
+                            <div class="flex bg-gray-100 p-0.5 rounded-lg text-xs font-bold text-gray-600">
+                                <button onclick="cambiarGranularidadGrafico('dia')" id="btn-gran-dia" class="px-2.5 py-1 rounded-md transition">Día</button>
+                                <button onclick="cambiarGranularidadGrafico('quincena')" id="btn-gran-quincena" class="px-2.5 py-1 rounded-md transition">Quincena</button>
+                                <button onclick="cambiarGranularidadGrafico('mes')" id="btn-gran-mes" class="px-2.5 py-1 rounded-md bg-white text-tlm-primary shadow-sm transition">Mes</button>
+                            </div>
+                        </div>
+                        <div class="relative h-64 w-full">
+                            <canvas id="chartEvolucion"></canvas>
+                        </div>
+                    </div>
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                        <div class="flex justify-between items-center mb-4">
+                            <h4 class="font-bold text-gray-800">Concentración de Gasto (Top 5)</h4>
+                            <span class="text-[10px] bg-gray-100 text-gray-500 font-bold px-2 py-1 rounded">Proveedores y Costos</span>
+                        </div>
+                        <div class="relative h-64 w-full">
+                            <canvas id="chartProveedores"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- VISTA 2: CARGUE Y AUDITORÍA -->
+            <section id="sec-facturas" class="hidden space-y-6">
+                <!-- Panel de Carga + Métrica de Comprobantes Integrada -->
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+                    <div class="lg:col-span-9 bg-white p-6 rounded-2xl border-2 border-dashed border-indigo-200 hover:border-tlm-primary transition text-center space-y-3">
+                        <div class="w-12 h-12 bg-indigo-50 text-tlm-primary rounded-full flex items-center justify-center mx-auto text-xl"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+                        <div><h4 class="text-base font-bold text-gray-800">Carga Automática y Manual de Comprobantes</h4><p class="text-xs text-gray-400">Procesa paquetes comprimidos (.ZIP), archivos XML UBL 2.1 o documentos PDF.</p></div>
+                        <input type="file" id="file-input" multiple accept=".zip,.xml,.pdf" class="hidden" onchange="subirFacturas(this.files)">
+                        <div class="flex flex-wrap justify-center gap-2 pt-1">
+                            <button onclick="document.getElementById('file-input').click()" class="bg-tlm-primary hover:bg-indigo-900 text-white font-bold px-5 py-2 rounded-xl text-xs shadow active:scale-95 transition-all flex items-center gap-2"><i class="fa-solid fa-upload"></i> <span>Subir Archivos</span></button>
+                            <button onclick="descargarAuditoriaExcel()" id="btn-excel-auditoria" class="bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 py-2 rounded-xl text-xs shadow active:scale-95 transition-all flex items-center gap-2"><i class="fa-solid fa-file-excel"></i> <span>Auditoría Excel</span></button>
+                            <button onclick="descargarPlanoSiigo()" id="btn-siigo-export" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl text-xs shadow active:scale-95 transition-all flex items-center gap-2"><i class="fa-solid fa-file-export"></i> <span>Exportar ERP</span></button>
+                            <button onclick="descargarSoportesPDF()" id="btn-descargar-pdfs" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-xl text-xs shadow active:scale-95 transition-all flex items-center gap-2"><i class="fa-solid fa-file-zipper"></i> <span>Soportes PDF</span></button>
+                        </div>
+                    </div>
+
+                    <!-- Métrica de Volumen Operativo (Facturas Únicas + Líneas) -->
+                    <div class="lg:col-span-3 bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center items-center text-center">
+                        <div class="w-10 h-10 rounded-full bg-indigo-50 text-tlm-primary flex items-center justify-center font-bold text-base mb-2">
+                            <i class="fa-solid fa-receipt"></i>
+                        </div>
+                        <span id="kpi-total-docs" class="text-4xl font-black text-tlm-primary">0</span>
+                        <p class="text-xs text-gray-700 font-bold mt-1">Facturas Únicas (PDFs)</p>
+                        <span id="kpi-total-lineas-sub" class="text-[10px] text-gray-400 mt-1 font-semibold">0 Líneas Contables Registradas</span>
+                    </div>
+                </div>
+
+                <!-- TABLA EXPANDIDA CON FILTRADO DE FECHAS Y TIPOS -->
+                <div class="w-full bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col justify-between">
+                    <div>
+                        <div class="p-4 border-b border-gray-100 flex flex-wrap gap-3 justify-between items-center bg-gray-50">
+                            <div class="flex flex-wrap items-center gap-3 flex-1">
+                                <div class="relative min-w-[200px] flex-1">
+                                    <i class="fa-solid fa-search absolute left-3 top-2.5 text-gray-400 text-xs"></i>
+                                    <input type="text" id="filtro-auditoria" onkeyup="ejecutarFiltroTablaYAPI()" placeholder="Buscar por tercero, NIT, ítem o factura..." class="w-full pl-8 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs font-semibold focus:border-tlm-primary focus:outline-none transition shadow-sm">
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <span class="text-[11px] font-bold text-gray-500">Desde:</span>
+                                    <input type="date" id="filtro-fecha-desde" onchange="cargarFacturasAPI()" class="p-1 border border-gray-200 rounded-lg text-xs font-semibold focus:outline-none text-gray-700 bg-white">
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <span class="text-[11px] font-bold text-gray-500">Hasta:</span>
+                                    <input type="date" id="filtro-fecha-hasta" onchange="cargarFacturasAPI()" class="p-1 border border-gray-200 rounded-lg text-xs font-semibold focus:outline-none text-gray-700 bg-white">
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <span class="text-[11px] font-bold text-gray-500">Tipo:</span>
+                                    <select id="filtro-tipo-comprobante" onchange="cargarFacturasAPI()" class="p-1 border border-gray-200 rounded-lg text-xs font-bold text-gray-700 bg-white cursor-pointer focus:outline-none">
+                                        <option value="TODAS" selected>Todas las Transacciones</option>
+                                        <option value="COMPRAS">Solo Compras (Egresos)</option>
+                                        <option value="VENTAS">Solo Ventas (Ingresos)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button id="btn-borrado-masivo" onclick="ejecutarBorradoMasivo()" class="hidden bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm active:scale-95 transition-all">
+                                    <i class="fa-solid fa-trash-can mr-1"></i> Borrar (<span id="contador-borrado">0</span>)
+                                </button>
+                                <button onclick="cargarFacturasAPI()" class="text-tlm-primary hover:text-indigo-900 text-xs font-bold bg-indigo-50 px-3 py-1.5 rounded-lg active:scale-95 transition-all"><i class="fa-solid fa-rotate-right mr-1"></i> Refrescar BD</button>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto max-h-[550px]">
+                            <table class="w-full text-left text-xs text-gray-600 whitespace-nowrap">
+                                <thead class="bg-white text-gray-500 uppercase font-bold sticky top-0 border-b shadow-sm z-10">
+                                    <tr>
+                                        <th class="p-3 w-8 text-center"><input type="checkbox" id="cb-select-all" onclick="toggleSeleccionMasiva(this)" class="w-4 h-4 cursor-pointer accent-tlm-primary"></th>
+                                        <th class="p-3">Acción</th>
+                                        <th class="p-3">Factura</th>
+                                        <th class="p-3">Fecha</th>
+                                        <th class="p-3">Tercero / NIT</th>
+                                        <th class="p-3">Ítem / Descripción</th>
+                                        <th class="p-3 text-right">Cant.</th>
+                                        <th class="p-3 text-right">V. Unitario</th>
+                                        <th class="p-3 text-right">Subtotal</th>
+                                        <th class="p-3 text-right">IVA</th>
+                                        <th class="p-3">Condición</th>
+                                        <th class="p-3">Cta. Contable</th>
+                                        <th class="p-3">RteFte (%)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tabla-facturas-body"><tr><td colspan="13" class="p-8 text-center text-gray-400 font-bold">Cargando datos...</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="p-4 border-t border-gray-100 bg-gray-50 flex items-center justify-between text-xs font-semibold text-gray-600">
+                        <div class="flex items-center gap-2">
+                            <span>Mostrar:</span>
+                            <select id="select-tamano-pagina" onchange="cambiarTamanoPagina(this.value)" class="bg-white border border-gray-300 rounded-lg p-1 text-xs font-bold focus:outline-none cursor-pointer">
+                                <option value="25" selected>25 por página</option>
+                                <option value="50">50 por página</option>
+                                <option value="100">100 por página</option>
+                                <option value="all">Todas las facturas</option>
+                            </select>
+                        </div>
+                        <div id="info-paginacion" class="text-gray-500">Página 1 de 1</div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="cambiarPagina(-1)" class="px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-100 text-gray-700 shadow-sm transition"><i class="fa-solid fa-chevron-left mr-1"></i> Anterior</button>
+                            <button onclick="cambiarPagina(1)" class="px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-100 text-gray-700 shadow-sm transition">Siguiente <i class="fa-solid fa-chevron-right ml-1"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- VISTA 3: CENTRO FISCAL -->
+            <section id="sec-centro-fiscal" class="hidden space-y-6">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100"><h3 class="text-lg font-bold text-gray-800 mb-1">🏛️ Liquidación Formulario 350 (Retenciones)</h3><p class="text-sm text-gray-500">Cálculo automático de impuestos nacionales y territoriales sobre compras registradas.</p></div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-4">
+                        <h4 class="font-bold text-tlm-primary text-md border-b pb-2">Rentas Nacionales (DIAN)</h4>
+                        <div id="cajas-f350-container" class="space-y-3"></div>
+                        <div class="p-4 bg-indigo-50 rounded-xl flex justify-between items-center font-bold text-tlm-primary"><span>Total Retefuente Nacional:</span><span id="f350-total-nacional" class="text-xl">$0</span></div>
+                    </div>
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-4">
+                        <h4 class="font-bold text-emerald-700 text-md border-b pb-2">Territoriales y Complementarias</h4>
+                        <div class="p-4 bg-emerald-50 rounded-xl border-l-4 border-emerald-500 flex justify-between items-center"><div><p class="font-bold text-emerald-900">🏭 Retención ICA</p><p class="text-xs text-emerald-600">Industria y Comercio</p></div><span id="f350-total-ica" class="text-xl font-black text-emerald-800">$0</span></div>
+                        <div class="p-4 bg-rose-50 rounded-xl border-l-4 border-rose-500 flex justify-between items-center"><div><p class="font-bold text-rose-900">🧾 Retención IVA</p><p class="text-xs text-rose-600">ReteIVA Asumido</p></div><span id="f350-total-reteiva" class="text-xl font-black text-rose-800">$0</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- VISTA 4: CONCILIACIÓN BANCARIA -->
+            <section id="sec-conciliacion" class="hidden space-y-6">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex justify-between items-center">
+                    <div>
+                        <h4 class="font-bold text-gray-800 mb-1">Conciliación Bancaria Automática</h4>
+                        <p class="text-sm text-gray-500">Cruza registros bancarios y contables definiendo un margen de tolerancia para comisiones y diferencias menores.</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="convertirPDFaExcelDirecto()" id="btn-convertir-pdf-excel" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-xl text-xs shadow transition active:scale-95 flex items-center gap-2">
+                            <i class="fa-solid fa-file-excel"></i> <span>📄 Convertir PDF Bancario a Excel</span>
+                        </button>
+                        <button id="btn-descargar-conciliacion-excel" onclick="descargarConciliacionExcel()" class="hidden bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl text-xs shadow transition active:scale-95 flex items-center gap-2">
+                            <i class="fa-solid fa-file-excel"></i> <span>Descargar Informe Completo (Excel)</span>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    <!-- Panel de Carga de Archivos -->
+                    <div class="lg:col-span-5 bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-4">
+                        <h5 class="font-bold text-gray-700 text-sm">1. Auxiliar de Libros (Siigo Nube / ERP)</h5>
+                        <input type="file" id="file-siigo" accept=".csv,.xlsx,.xls" class="block w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:font-semibold file:bg-indigo-50 file:text-tlm-primary hover:file:bg-indigo-100">
+                        
+                        <div class="flex justify-between items-center pt-2">
+                            <h5 class="font-bold text-gray-700 text-sm">2. Extracto Bancario (PDF / Excel / CSV)</h5>
+                            <select id="select-banco-origen" class="text-xs font-bold text-tlm-primary bg-indigo-50 border border-indigo-200 rounded-lg p-1 focus:outline-none">
+                                <option value="AUTO" selected>Auto-Detectar Banco</option>
+                                <option value="DAVIVIENDA">Banco Davivienda</option>
+                                <option value="BANCOLOMBIA">Bancolombia</option>
+                                <option value="BANCO_BOGOTA">Banco de Bogotá</option>
+                                <option value="BCS">Banco Caja Social</option>
+                                <option value="GLOBAL66">Global66</option>
+                                <option value="BBVA">Banco BBVA</option>
+                            </select>
+                        </div>
+                        <input type="file" id="file-banco" accept=".pdf,.csv,.xlsx,.xls" class="block w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100">
+                        
+                        <div class="pt-2">
+                            <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Tolerancia de Cruce (Pesos COP)</label>
+                            <input type="number" id="tolerancia-conciliacion" value="100" min="0" step="1" class="w-full p-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 focus:outline-none focus:border-tlm-primary">
+                            <p class="text-[10px] text-gray-400 mt-1">Si la diferencia entre el valor registrado y el extracto es igual o menor a esta cifra, se conciliará automáticamente.</p>
+                        </div>
+
+                        <button onclick="ejecutarConciliacion()" id="btn-ejecutar-conciliacion" class="w-full bg-tlm-primary hover:bg-indigo-900 text-white font-bold py-3 rounded-xl shadow-lg active:scale-95 transition-all mt-4 flex items-center justify-center gap-2"><i class="fa-solid fa-bolt"></i> <span>Ejecutar Conciliación</span></button>
+                    </div>
+
+                    <!-- Panel de Resultados en Pantalla -->
+                    <div class="lg:col-span-7 bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-between" id="container-conciliacion-resultados">
+                        <div id="resultado-conciliacion-card" class="flex flex-col justify-center items-center text-center text-gray-400 min-h-[300px]">
+                            <i class="fa-solid fa-file-invoice-dollar text-4xl mb-3 text-gray-300"></i>
+                            <p class="text-sm font-bold">Carga los archivos para visualizar los resultados en pantalla.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- VISTA 5: CEREBRO CONTABLE (MASTER DATA) -->
+            <section id="sec-cerebro" class="hidden space-y-6">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex justify-between items-center">
+                    <div><h3 class="text-lg font-bold text-gray-800">🧠 Cerebro Contable (Master Data Management)</h3><p class="text-sm text-gray-500">Gestión de Catálogos (PUC) y Saldos Históricos (Balance de Prueba) mediante Modelo Canónico de Datos.</p></div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Tarjeta 1: PUC -->
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-4">
+                        <div class="flex items-center justify-between border-b pb-3">
+                            <div class="flex items-center gap-3"><div class="bg-indigo-50 text-tlm-primary w-10 h-10 rounded-full flex items-center justify-center text-lg"><i class="fa-solid fa-book"></i></div><div><h4 class="font-bold text-gray-800">Cargar Catálogo PUC</h4><p class="text-xs text-gray-400">Excel estándar exportado desde el ERP.</p></div></div>
+                            <button onclick="purgarMemoria('puc')" title="Vaciar Catálogo" class="text-rose-400 hover:text-rose-600 bg-rose-50 p-2 rounded-lg transition active:scale-90"><i class="fa-solid fa-trash-can"></i></button>
+                        </div>
+                        <input type="file" id="file-puc" accept=".csv,.xlsx,.xls" class="block w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:font-semibold file:bg-indigo-50 file:text-tlm-primary hover:file:bg-indigo-100">
+                        <button id="btn-subir-puc" onclick="subirPUC()" class="w-full bg-tlm-primary hover:bg-indigo-900 text-white font-bold py-3 rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2"><i class="fa-solid fa-cloud-arrow-up"></i> <span>Sincronizar Cuentas</span></button>
+                    </div>
+
+                    <!-- Tarjeta 2: BALANCE -->
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-4 relative overflow-hidden group">
+                        <div class="flex items-center justify-between border-b pb-3 relative z-0">
+                            <div class="flex items-center gap-3"><div class="bg-emerald-50 text-emerald-600 w-10 h-10 rounded-full flex items-center justify-center text-lg"><i class="fa-solid fa-scale-balanced"></i></div><div><h4 class="font-bold text-gray-800">Cargar Balance de Prueba</h4><p class="text-xs text-gray-400">Modelo Agnóstico (Auto-Adapter ERP)</p></div></div>
+                            <button onclick="purgarMemoria('balance')" title="Vaciar Balance" class="text-rose-400 hover:text-rose-600 bg-rose-50 p-2 rounded-lg transition active:scale-90"><i class="fa-solid fa-trash-can"></i></button>
+                        </div>
+                        <input type="file" id="file-balance" accept=".csv,.xlsx,.xls" class="block w-full text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 relative z-0">
+                        <button id="btn-subir-balance" onclick="subirBalancePrueba()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 relative z-0"><i class="fa-solid fa-cloud-arrow-up"></i> <span>Sincronizar Saldos</span></button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- VISTA 6: PANEL DE ACCESOS -->
+            <section id="sec-accesos" class="hidden space-y-6">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex justify-between items-center">
+                    <div><h3 class="text-lg font-bold text-gray-800">🔐 Gestión de Usuarios y Accesos</h3><p class="text-sm text-gray-500">Aprueba o rechaza solicitudes y asigna permisos de empresas a cada Analista.</p></div>
+                    <button onclick="cargarUsuariosGobernanza()" class="text-tlm-primary hover:text-indigo-900 text-xs font-bold bg-indigo-50 px-3 py-1.5 rounded-lg active:scale-95 transition-all"><i class="fa-solid fa-rotate-right mr-1"></i> Refrescar</button>
+                </div>
+                <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                    <table class="w-full text-left text-xs text-gray-600">
+                        <thead class="bg-gray-100 text-gray-500 uppercase font-bold">
+                            <tr><th class="p-3">Nombre</th><th class="p-3">Correo</th><th class="p-3">Estado</th><th class="p-3 text-center">Permisos ERP</th><th class="p-3 text-center">Acciones de Aprobación</th></tr>
+                        </thead>
+                        <tbody id="tbody-usuarios-gobernanza"></tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- MODAL VISOR DE PDF FLUIDO -->
+    <div id="modal-pdf-visor" class="fixed inset-0 bg-gray-950/80 backdrop-blur-sm hidden flex items-center justify-center z-50 p-4 transition-all" onclick="cerrarModalPDFOutside(event)">
+        <div class="bg-white w-full max-w-5xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]" onclick="event.stopPropagation()">
+            <div class="px-6 py-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-file-pdf text-rose-600 text-lg"></i>
+                    <h3 id="pdf-modal-titulo" class="font-bold text-gray-800 text-base">Visor de Comprobante</h3>
+                </div>
+                <button onclick="cerrarModalPDF()" class="text-gray-400 hover:text-gray-700 bg-white border border-gray-200 w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shadow-sm transition active:scale-95">&times;</button>
+            </div>
+            <div id="pdf-modal-container" class="p-4 flex-1 bg-gray-100 flex items-center justify-center overflow-hidden min-h-[70vh]">
+            </div>
+        </div>
+    </div>
+
+    <!-- MODALES DE SESIÓN Y EMPRESAS -->
+    <div id="modal-login" class="fixed inset-0 bg-gray-950/90 backdrop-blur-md flex items-center justify-center z-50">
+        <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl p-6 space-y-4">
+            <div class="text-center border-b pb-3"><div class="w-12 h-12 bg-tlm-primary text-white font-bold text-2xl rounded-2xl mx-auto flex items-center justify-center">TLM</div><h3 class="font-bold text-gray-800 pt-2">Consola Fiscal</h3></div>
+            <div class="flex border-b text-sm font-bold text-gray-500 mb-2">
+                <button id="tab-btn-login" onclick="alternarTabAuth('login')" class="w-1/2 pb-2 border-b-2 border-tlm-primary text-tlm-primary font-bold">Iniciar Sesión</button>
+                <button id="tab-btn-register" onclick="alternarTabAuth('register')" class="w-1/2 pb-2 text-gray-400 hover:text-gray-600 font-bold">Crear Cuenta</button>
+            </div>
+            <form id="form-auth-login" onsubmit="ejecutarLogin(event)" class="space-y-3">
+                <input type="email" id="login-email" required placeholder="correo@empresa.com" class="w-full p-2 border rounded-xl focus:border-tlm-primary focus:outline-none">
+                <input type="password" id="login-password" required placeholder="••••••••" class="w-full p-2 border rounded-xl focus:border-tlm-primary focus:outline-none">
+                <button type="submit" class="w-full py-3 bg-tlm-accent text-white rounded-xl font-bold active:scale-95 transition-all">Iniciar Sesión</button>
+            </form>
+            <form id="form-auth-register" onsubmit="ejecutarRegistro(event)" class="space-y-3 hidden">
+                <input type="text" id="reg-nombre" required placeholder="Nombre Completo" class="w-full p-2 border rounded-xl focus:border-tlm-primary focus:outline-none">
+                <input type="email" id="reg-email" required placeholder="Correo Electronico" class="w-full p-2 border rounded-xl focus:border-tlm-primary focus:outline-none">
+                <input type="password" id="reg-password" required placeholder="••••••••" class="w-full p-2 border rounded-xl focus:border-tlm-primary focus:outline-none">
+                <button type="submit" class="w-full py-3 bg-tlm-primary text-white rounded-xl font-bold active:scale-95 transition-all">Solicitar Registro</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-empresa" class="fixed inset-0 bg-gray-900/50 backdrop-blur-sm hidden flex items-center justify-center z-50">
+        <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl p-6 space-y-4">
+            <div class="flex justify-between items-center border-b pb-3"><h3 class="font-bold text-lg">🏢 Crear Cliente</h3><button onclick="cerrarModalNuevaEmpresa()" class="text-xl">&times;</button></div>
+            <form onsubmit="guardarNuevaEmpresa(event)" class="space-y-3">
+                <div><label class="block text-xs font-bold text-gray-500 uppercase">Razón Social</label><input type="text" id="new-empresa-nombre" required class="w-full p-2 border rounded-xl text-sm"></div>
+                <div><label class="block text-xs font-bold text-gray-500 uppercase">NIT</label><input type="text" id="new-empresa-nit" required class="w-full p-2 border rounded-xl text-sm"></div>
+                <div><label class="block text-xs font-bold text-gray-500 uppercase">URL del Logo (Opcional)</label><input type="url" id="new-empresa-logo" placeholder="https://dominio.com/logo.png" class="w-full p-2 border rounded-xl text-sm"></div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase">Software / ERP Destino</label>
+                    <select id="new-empresa-software" class="w-full p-2 border rounded-xl text-sm bg-white focus:border-tlm-primary focus:outline-none">
+                        <optgroup label="Ecosistema Siigo"><option value="SIIGO_NUBE">Siigo Nube</option><option value="SIIGO_PYME">Siigo Pyme (Desktop)</option></optgroup>
+                        <optgroup label="Sistemas Nacionales"><option value="WORLD_OFFICE">World Office</option><option value="ALIADDO">Aliaddo</option><option value="ALEGRA">Alegra</option></optgroup>
+                        <optgroup label="Sistemas Corporativos"><option value="SAP_B1">SAP Business One</option><option value="ODOO">Odoo ERP</option></optgroup>
+                    </select>
+                </div>
+                <div class="flex justify-end pt-4 border-t"><button type="submit" class="px-5 py-2 bg-tlm-primary text-white rounded-xl font-bold text-xs active:scale-95 transition-all">Guardar</button></div>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-asignar-clientes" class="fixed inset-0 bg-gray-900/50 backdrop-blur-sm hidden flex items-center justify-center z-50">
+        <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl p-6 space-y-4">
+            <div class="flex justify-between items-center border-b pb-3">
+                <div><h3 class="font-bold text-lg text-gray-800">🔒 Control de Accesos</h3><p class="text-xs text-gray-500">Asigna el portafolio de empresas auditables</p></div>
+                <button onclick="cerrarModalAsignacion()" class="text-xl text-gray-400 hover:text-gray-700">&times;</button>
+            </div>
+            <div id="lista-clientes-asignacion" class="space-y-2 max-h-64 overflow-y-auto pr-2"><p class="text-xs text-center text-gray-400">Cargando portafolio de clientes...</p></div>
+            <div class="flex justify-end pt-4 border-t"><button onclick="guardarAsignacion()" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-md active:scale-95 transition-all"><i class="fa-solid fa-floppy-disk mr-1"></i> Guardar Privilegios</button></div>
+        </div>
+    </div>
+
+    <!-- SCRIPT PRINCIPAL -->
+    <script>
+        // API URL Fijada en Producción Local (Puerto 8000)
+        const API_URL = "http://127.0.0.1:8000";
+
+        let empresaActivaId = null;
+        let facturasCache = [];
+        let paginaActual = 1;
+        let registrosPorPagina = 25;
+        let seleccionadosSet = new Set();
+        let idUsuarioParaAsignar = null;
+        let listaTotalEmpresasCache = [];
+
+        let granularidadEvolucion = 'mes'; 
+        let datosConciliacionCache = null; 
+
+        let chartEvolucionInst = null;
+        let chartProveedoresInst = null;
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') cerrarModalPDF();
+        });
+
+        async function apiFetch(endpoint, options = {}) {
+            const token = localStorage.getItem('tlm_token');
+            const headers = {
+                'ngrok-skip-browser-warning': 'true',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+                ...(options.headers || {})
+            };
+            if (options.body && !(options.body instanceof FormData) && !headers['Content-Type']) { headers['Content-Type'] = 'application/json'; }
+            return fetch(`${API_URL}${endpoint}`, { ...options, headers });
+        }
+
+        function formatCOP(valor) { 
+            return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(valor || 0); 
+        }
+
+        function str(val) { return val ? val.toString() : ""; }
+
+        // AUTENTICACIÓN Y SESIÓN ROBUSTA (ANTI-UNDEFINED)
+        function alternarTabAuth(tab) {
+            if (tab === 'login') {
+                document.getElementById('form-auth-login').classList.remove('hidden'); document.getElementById('form-auth-register').classList.add('hidden');
+                document.getElementById('tab-btn-login').className = "w-1/2 pb-2 border-b-2 border-tlm-primary text-tlm-primary font-bold"; document.getElementById('tab-btn-register').className = "w-1/2 pb-2 text-gray-400 hover:text-gray-600 font-bold";
+            } else {
+                document.getElementById('form-auth-login').classList.add('hidden'); document.getElementById('form-auth-register').classList.remove('hidden');
+                document.getElementById('tab-btn-register').className = "w-1/2 pb-2 border-b-2 border-tlm-primary text-tlm-primary font-bold"; document.getElementById('tab-btn-login').className = "w-1/2 pb-2 text-gray-400 hover:text-gray-600 font-bold";
+            }
+        }
+
+        function verificarSesionGuard() {
+            const token = localStorage.getItem('tlm_token');
+            let usuario = localStorage.getItem('tlm_usuario');
+            const rol = localStorage.getItem('tlm_rol');
+            const navAccesos = document.getElementById('nav-accesos');
+
+            if (!usuario || usuario === 'undefined' || usuario === 'null') {
+                const sessionRaw = localStorage.getItem('tlm_session');
+                if (sessionRaw) {
+                    try {
+                        const parsed = JSON.parse(sessionRaw);
+                        usuario = parsed.nombre_completo || parsed.nombre || parsed.email || parsed.username;
+                    } catch(e){}
+                }
+            }
+            if (!usuario || usuario === 'undefined') usuario = "Usuario Activo";
+
+            if (token && usuario) {
+                document.getElementById('modal-login').classList.add('hidden'); 
+                document.getElementById('main-content').classList.remove('hidden'); 
+                document.getElementById('user-display').innerText = `👤 ${usuario}`;
+                if (rol === 'Administrador' || rol === 'admin' || rol === 'ADMIN') navAccesos.classList.remove('hidden'); else navAccesos.classList.add('hidden');
+                verificarBackend();
+            } else { 
+                document.getElementById('modal-login').classList.remove('hidden'); 
+                document.getElementById('main-content').classList.add('hidden'); 
+            }
+        }
+
+        function gestionarSesionUsuario() { if (localStorage.getItem('tlm_token') && confirm("¿Deseas cerrar sesión?")) { localStorage.clear(); verificarSesionGuard(); } }
+
+        async function ejecutarLogin(e) {
+            e.preventDefault();
+            const emailInput = document.getElementById('login-email').value; 
+            const passwordInput = document.getElementById('login-password').value;
+            try {
+                const res = await apiFetch(`/api/v1/auth/login`, { method: "POST", body: JSON.stringify({ email: emailInput, password: passwordInput }) });
+                if (res.ok) {
+                    const data = await res.json();
+                    const usrObj = data.usuario || data.user || data;
+                    const nombreUsr = usrObj.nombre_completo || usrObj.nombre || data.usuario_nombre || emailInput;
+                    const rolUsr = usrObj.rol || data.rol || 'Analista';
+
+                    localStorage.setItem('tlm_token', data.access_token || 'active_token'); 
+                    localStorage.setItem('tlm_usuario', nombreUsr); 
+                    localStorage.setItem('tlm_rol', rolUsr); 
+                    localStorage.setItem('tlm_email', emailInput);
+                    localStorage.setItem('tlm_session', JSON.stringify(usrObj));
+
+                    document.getElementById('login-password').value = ""; 
+                    verificarSesionGuard();
+                } else { 
+                    const err = await res.json().catch(() => ({}));
+                    alert(`Error de autenticación: ${err.detail || err.mensaje || 'Credenciales inválidas'}`); 
+                }
+            } catch { alert("Fallo de conexión al iniciar sesión."); }
+        }
+
+        async function ejecutarRegistro(e) {
+            e.preventDefault();
+            const payload = {
+                nombre_completo: document.getElementById('reg-nombre').value, 
+                nombre: document.getElementById('reg-nombre').value,
+                email: document.getElementById('reg-email').value, 
+                password: document.getElementById('reg-password').value
+            };
+            try {
+                const res = await apiFetch(`/api/v1/auth/register`, { method: "POST", body: JSON.stringify(payload) });
+                if (res.ok) {
+                    alert("✅ Solicitud de registro enviada. Un Administrador debe aprobar tu cuenta.");
+                    document.getElementById('reg-nombre').value = ""; document.getElementById('reg-email').value = ""; document.getElementById('reg-password').value = "";
+                    alternarTabAuth('login');
+                } else { alert(`Atención en el registro.`); }
+            } catch (error) { alert(`Error al registrar usuario.`); }
+        }
+
+        // EMPRESAS Y SELECTOR (RLS EN SELECTOR DE ENTORNO)
+        async function verificarBackend() {
+            try {
+                const res = await apiFetch(`/health`);
+                if (res.ok) { document.getElementById('api-status').innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500"></span> Conectado`; await cargarListaEmpresas(); } 
+                else throw new Error("Sin respuesta válida.");
+            } catch { document.getElementById('api-status').innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-500"></span> Desconectado`; }
+        }
+
+        function limpiarMétricas() {
+            document.getElementById('kpi-ingresos').innerText = "$0"; document.getElementById('kpi-egresos').innerText = "$0"; 
+            document.getElementById('kpi-margen').innerText = "0%"; document.getElementById('kpi-retefuente').innerText = "$0"; document.getElementById('kpi-total-docs').innerText = "0";
+            if(document.getElementById('kpi-total-lineas-sub')) document.getElementById('kpi-total-lineas-sub').innerText = "0 Líneas Contables Registradas";
+            document.getElementById('tabla-facturas-body').innerHTML = `<tr><td colspan="13" class="p-8 text-center text-gray-400 font-bold">Sin cliente seleccionado.</td></tr>`;
+            actualizarBadgeEntorno(null);
+            facturasCache = [];
+            renderizarGraficosBI();
+        }
+
+        function toggleMenuEmpresas(e) {
+            if(e) e.stopPropagation();
+            const menu = document.getElementById('dropdown-empresa-menu'); const icon = document.getElementById('icon-chevron-empresa');
+            if (menu.classList.contains('hidden')) { menu.classList.remove('hidden'); icon.classList.add('rotate-180'); } 
+            else { menu.classList.add('hidden'); icon.classList.remove('rotate-180'); }
+        }
+
+        function cerrarMenuEmpresasFuera(e) {
+            const container = document.getElementById('container-empresa-selector');
+            if (container && !container.contains(e.target)) {
+                document.getElementById('dropdown-empresa-menu').classList.add('hidden');
+                document.getElementById('icon-chevron-empresa').classList.remove('rotate-180');
+            }
+        }
+
+        function actualizarBadgeEntorno(empresa) {
+            const badge = document.getElementById('badge-entorno-activo'); const textoBadge = document.getElementById('badge-nombre-empresa');
+            const nameHeader = document.getElementById('header-empresa-nombre'); const nitHeader = document.getElementById('header-empresa-nit'); const logoHeader = document.getElementById('header-empresa-logo');
+
+            if (empresa) {
+                const nombreEmp = empresa.nombre_comercial || empresa.razon_social;
+                textoBadge.innerText = `${nombreEmp} (NIT: ${empresa.nit})`;
+                nameHeader.innerText = nombreEmp; nitHeader.innerText = `NIT: ${empresa.nit}`;
+                if (empresa.logo_url) { logoHeader.innerHTML = `<img src="${empresa.logo_url}" alt="Logo" class="w-full h-full object-cover rounded-lg">`; } 
+                else { const iniciales = nombreEmp.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase(); logoHeader.innerHTML = `<span class="font-black text-xs">${iniciales}</span>`; }
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden'); nameHeader.innerText = "Seleccionar Cliente"; nitHeader.innerText = "NIT: ---------"; logoHeader.innerHTML = "🏢";
+            }
+        }
+        
+        async function cargarListaEmpresas() {
+            const emailLogueado = localStorage.getItem('tlm_email') || ''; 
+            const rolLogueado = localStorage.getItem('tlm_rol') || '';
+            
+            try {
+                // Consulta con parámetros de usuario para aplicar RLS en la barra del usuario
+                let res = await apiFetch(`/api/v1/empresas/?email=${encodeURIComponent(emailLogueado)}&rol=${rolLogueado}`);
+
+                if (res.ok) {
+                    const empresas = await res.json(); 
+                    listaTotalEmpresasCache = empresas;
+
+                    if (Array.isArray(empresas) && empresas.length > 0) {
+                        document.getElementById('banner-sin-empresas').classList.add('hidden');
+                        const empresaGuardada = localStorage.getItem('tlm_empresa_activa'); 
+                        let empresaInicial = empresas[0].id_empresa || empresas[0].id;
+                        
+                        if (empresaGuardada && empresas.some(e => (e.id_empresa || e.id) == empresaGuardada)) { 
+                            empresaInicial = parseInt(empresaGuardada); 
+                        }
+                        
+                        empresaActivaId = empresaInicial; 
+                        localStorage.setItem('tlm_empresa_activa', empresaActivaId);
+                        renderizarListaEmpresasDropdown(); 
+                        const empObjeto = empresas.find(e => (e.id_empresa || e.id) == empresaActivaId); 
+                        actualizarBadgeEntorno(empObjeto);
+                        cargarKPIsDashboard(); cargarFacturasAPI(); cargarCentroFiscal();
+                    } else {
+                        empresaActivaId = null; 
+                        document.getElementById('lista-empresas-items').innerHTML = `<p class="text-xs text-center text-amber-600 font-bold py-3">Sin Clientes Asignados</p>`;
+                        document.getElementById('banner-sin-empresas').classList.remove('hidden'); 
+                        limpiarMétricas();
+                    }
+                }
+            } catch (err) {}
+        }
+
+        function renderizarListaEmpresasDropdown(filtro = '') {
+            const contenedor = document.getElementById('lista-empresas-items');
+            const filtradas = listaTotalEmpresasCache.filter(e => {
+                const nom = (e.nombre_comercial || e.razon_social || '').toLowerCase();
+                return nom.includes(filtro.toLowerCase()) || (e.nit || '').includes(filtro);
+            });
+
+            if(filtradas.length === 0) { contenedor.innerHTML = `<p class="text-xs text-center text-gray-400 py-3">No hay coincidencias</p>`; return; }
+
+            contenedor.innerHTML = filtradas.map(emp => {
+                const empId = emp.id_empresa || emp.id;
+                const isSelected = empId == empresaActivaId;
+                const nombreEmp = emp.nombre_comercial || emp.razon_social;
+                const iniciales = nombreEmp.split(' ').map(w => w[0]).join('').substring(0,2).toUpperCase();
+                const logoHtml = emp.logo_url ? `<img src="${emp.logo_url}" class="w-7 h-7 rounded-md object-cover">` : `<div class="w-7 h-7 rounded-md ${isSelected ? 'bg-tlm-primary text-white' : 'bg-gray-200 text-gray-700'} font-bold text-[10px] flex items-center justify-center">${iniciales}</div>`;
+
+                return `
+                <button onclick="solicitarCambioEmpresa(${empId})" class="w-full text-left p-2 rounded-xl flex items-center justify-between gap-2 transition ${isSelected ? 'bg-indigo-50 border border-indigo-200' : 'hover:bg-gray-50 border border-transparent'}">
+                    <div class="flex items-center gap-2.5 min-w-0">${logoHtml}<div class="truncate leading-tight"><span class="block font-bold text-xs ${isSelected ? 'text-tlm-primary' : 'text-gray-800'} truncate">${nombreEmp}</span><span class="block text-[10px] text-gray-400 font-mono">NIT: ${emp.nit}</span></div></div>
+                    ${isSelected ? '<i class="fa-solid fa-circle-check text-tlm-primary text-xs"></i>' : ''}
+                </button>`;
+            }).join('');
+        }
+
+        function filtrarListaEmpresasDropdown() { const q = document.getElementById('filtro-empresas-list').value; renderizarListaEmpresasDropdown(q); }
+
+        function solicitarCambioEmpresa(nuevoId) { 
+            document.getElementById('dropdown-empresa-menu').classList.add('hidden'); document.getElementById('icon-chevron-empresa').classList.remove('rotate-180');
+            if(!nuevoId || nuevoId == empresaActivaId) return;
+
+            const empresaDestino = listaTotalEmpresasCache.find(e => (e.id_empresa || e.id) == nuevoId);
+            const nombreDestino = empresaDestino ? `${empresaDestino.nombre_comercial || empresaDestino.razon_social}` : `ID ${nuevoId}`;
+            
+            if (confirm(`⚠️ CONFIRMACIÓN DE CAMBIO DE ENTORNO FISCAL\n\n¿Deseas cambiar tu sesión de trabajo a:\n👉 "${nombreDestino}"?`)) {
+                empresaActivaId = parseInt(nuevoId); localStorage.setItem('tlm_empresa_activa', empresaActivaId);
+                paginaActual = 1; seleccionadosSet.clear();
+                actualizarBadgeEntorno(empresaDestino); renderizarListaEmpresasDropdown();
+                cargarKPIsDashboard(); cargarFacturasAPI(); cargarCentroFiscal(); 
+            }
+        }
+
+        function abrirModalNuevaEmpresa() { document.getElementById('dropdown-empresa-menu').classList.add('hidden'); document.getElementById('modal-empresa').classList.remove('hidden'); }
+        function cerrarModalNuevaEmpresa() { document.getElementById('modal-empresa').classList.add('hidden'); }
+
+        async function guardarNuevaEmpresa(e) {
+            e.preventDefault(); const emailCreador = localStorage.getItem('tlm_email') || '';
+            const payload = {
+                nombre_comercial: document.getElementById('new-empresa-nombre').value, 
+                razon_social: document.getElementById('new-empresa-nombre').value, 
+                nit: document.getElementById('new-empresa-nit').value,
+                software_erp: document.getElementById('new-empresa-software').value, 
+                software_destino: document.getElementById('new-empresa-software').value,
+                logo_url: document.getElementById('new-empresa-logo')?.value || null
+            };
+
+            try {
+                const res = await apiFetch(`/api/v1/empresas/?creador_email=${encodeURIComponent(emailCreador)}`, { method: "POST", body: JSON.stringify(payload) });
+                if (res.ok) {
+                    alert("🏢 Cliente registrado exitosamente."); cerrarModalNuevaEmpresa();
+                    document.getElementById('new-empresa-nombre').value = ""; document.getElementById('new-empresa-nit').value = "";
+                    if(document.getElementById('new-empresa-logo')) document.getElementById('new-empresa-logo').value = "";
+                    await cargarListaEmpresas();
+                } else { alert("Error al crear la empresa."); }
+            } catch (error) { alert(`Error de red: ${error.message}`); }
+        }
+        
+        function cambiarSeccion(seccion) {
+            ['dashboard', 'facturas', 'centro-fiscal', 'conciliacion', 'cerebro', 'accesos'].forEach(s => {
+                const sec = document.getElementById(`sec-${s}`); if (sec) sec.classList.add('hidden');
+                const nav = document.getElementById(`nav-${s}`); if (nav) nav.classList.remove('bg-tlm-accent', 'shadow-md');
+            });
+            document.getElementById(`sec-${seccion}`).classList.remove('hidden'); document.getElementById(`nav-${seccion}`).classList.add('bg-tlm-accent', 'shadow-md');
+            if (seccion === 'dashboard') cargarKPIsDashboard();
+            if (seccion === 'facturas') cargarFacturasAPI();
+            if (seccion === 'centro-fiscal') cargarCentroFiscal();
+            if (seccion === 'accesos') cargarUsuariosGobernanza();
+        }
+
+        // TABLEROS Y GRÁFICOS
+        function construirQueryFiltrosURL() {
+            const fDesde = document.getElementById('filtro-fecha-desde')?.value || '';
+            const fHasta = document.getElementById('filtro-fecha-hasta')?.value || '';
+            const fTipo = document.getElementById('filtro-tipo-comprobante')?.value || 'TODAS';
+
+            let q = `id_empresa=${empresaActivaId}`;
+            if(fDesde) q += `&fecha_desde=${fDesde}`;
+            if(fHasta) q += `&fecha_hasta=${fHasta}`;
+            if(fTipo !== 'TODAS') q += `&tipo_comprobante=${fTipo}`;
+            return q;
+        }
+
+        async function cargarKPIsDashboard() {
+            if(!empresaActivaId) return;
+            const q = construirQueryFiltrosURL();
+            try {
+                const res = await apiFetch(`/api/v1/facturas/kpis/resumen?${q}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('kpi-ingresos').innerText = formatCOP(data.ingresos_totales); 
+                    document.getElementById('kpi-egresos').innerText = formatCOP(data.egresos_totales); 
+                    document.getElementById('kpi-margen').innerText = `${data.margen_bruto_porcentaje}%`; 
+                    document.getElementById('kpi-retefuente').innerText = formatCOP(data.total_retefuente_f350); 
+                    
+                    document.getElementById('kpi-total-docs').innerText = data.total_comprobantes;
+                    if(document.getElementById('kpi-total-lineas-sub')) {
+                        document.getElementById('kpi-total-lineas-sub').innerText = `${facturasCache.length} Líneas Contables Registradas`;
+                    }
+                }
+            } catch {} 
+        }
+
+        function cambiarGranularidadGrafico(gran) {
+            granularidadEvolucion = gran;
+            ['dia', 'quincena', 'mes'].forEach(g => {
+                const btn = document.getElementById(`btn-gran-${g}`);
+                if (btn) {
+                    if (g === gran) {
+                        btn.className = "px-2.5 py-1 rounded-md bg-white text-tlm-primary shadow-sm transition";
+                    } else {
+                        btn.className = "px-2.5 py-1 rounded-md text-gray-500 hover:text-gray-800 transition";
+                    }
+                }
+            });
+            renderizarGraficosBI();
+        }
+
+        function renderizarGraficosBI() {
+            const ctxEvo = document.getElementById('chartEvolucion');
+            const ctxProv = document.getElementById('chartProveedores');
+            
+            if (!ctxEvo || !ctxProv) return;
+
+            if (!facturasCache || facturasCache.length === 0) {
+                if(chartEvolucionInst) chartEvolucionInst.destroy();
+                if(chartProveedoresInst) chartProveedoresInst.destroy();
+                return;
+            }
+
+            const datosPorFecha = {};
+            facturasCache.forEach(f => {
+                if(f.subtotal && f.fecha) { 
+                    let claveFecha = f.fecha; 
+                    
+                    if (granularidadEvolucion === 'mes') {
+                        claveFecha = f.fecha.substring(0, 7); 
+                    } else if (granularidadEvolucion === 'quincena') {
+                        const partes = f.fecha.split('-');
+                        if(partes.length === 3) {
+                            const diaNum = parseInt(partes[2]);
+                            const qStr = diaNum <= 15 ? 'Q1' : 'Q2';
+                            claveFecha = `${partes[0]}-${partes[1]} ${qStr}`; 
+                        }
+                    }
+
+                    if(!datosPorFecha[claveFecha]) datosPorFecha[claveFecha] = { ingresos: 0, egresos: 0 };
+                    
+                    const cta = str(f.cuenta_gasto || "");
+                    if (cta.startsWith('4')) {
+                        datosPorFecha[claveFecha].ingresos += f.subtotal;
+                    } else if (cta.startsWith('14') || cta.startsWith('5') || cta.startsWith('6') || cta.startsWith('7')) {
+                        datosPorFecha[claveFecha].egresos += f.subtotal;
+                    }
+                }
+            });
+
+            const fechasOrdenadas = Object.keys(datosPorFecha).sort();
+            const dataIngresos = fechasOrdenadas.map(d => datosPorFecha[d].ingresos);
+            const dataEgresos = fechasOrdenadas.map(d => datosPorFecha[d].egresos);
+
+            if(chartEvolucionInst) chartEvolucionInst.destroy();
+            chartEvolucionInst = new Chart(ctxEvo.getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: fechasOrdenadas,
+                    datasets: [
+                        {
+                            label: 'Ventas (Ingresos)', data: dataIngresos,
+                            borderColor: '#10B981', backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            borderWidth: 2, fill: true, tension: 0.3, pointRadius: 3
+                        },
+                        {
+                            label: 'Compras (Egresos)', data: dataEgresos,
+                            borderColor: '#F43F5E', backgroundColor: 'rgba(244, 63, 94, 0.1)',
+                            borderWidth: 2, fill: true, tension: 0.3, pointRadius: 3
+                        }
+                    ]
+                },
+                options: { 
+                    responsive: true, maintainAspectRatio: false, 
+                    plugins: { legend: { position: 'top', labels: { boxWidth: 10, font: { size: 10 } } }, tooltip: { callbacks: { label: (ctx) => formatCOP(ctx.raw) } } },
+                    scales: { x: { grid: { display: false } }, y: { beginAtZero: true, ticks: { callback: (val) => '$' + (val/1000000).toFixed(1) + 'M' } } }
+                }
+            });
+
+            const gastosPorProv = {};
+            facturasCache.forEach(f => {
+                const cta = str(f.cuenta_gasto || "");
+                if(f.subtotal && (cta.startsWith('14') || cta.startsWith('5') || cta.startsWith('6') || cta.startsWith('7'))) { 
+                    const prov = f.proveedor || 'Desconocido';
+                    gastosPorProv[prov] = (gastosPorProv[prov] || 0) + f.subtotal; 
+                }
+            });
+            const provSorted = Object.keys(gastosPorProv).map(k => ({ nombre: k, total: gastosPorProv[k] })).sort((a,b) => b.total - a.total).slice(0, 5);
+            const labelsProv = provSorted.map(p => p.nombre.length > 20 ? p.nombre.substring(0,20)+'...' : p.nombre);
+            const dataProv = provSorted.map(p => p.total);
+
+            if(chartProveedoresInst) chartProveedoresInst.destroy();
+            chartProveedoresInst = new Chart(ctxProv.getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    labels: labelsProv,
+                    datasets: [{
+                        data: dataProv,
+                        backgroundColor: ['#271A82', '#F37A20', '#10B981', '#F43F5E', '#3B82F6'],
+                        borderWidth: 0, hoverOffset: 4
+                    }]
+                },
+                options: { 
+                    responsive: true, maintainAspectRatio: false, cutout: '70%',
+                    plugins: { legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } }, tooltip: { callbacks: { label: (ctx) => formatCOP(ctx.raw) } } }
+                }
+            });
+        }
+
+        async function cargarFacturasAPI() {
+            if(!empresaActivaId) return;
+            const tbody = document.getElementById('tabla-facturas-body');
+            tbody.innerHTML = `<tr><td colspan="13" class="p-8 text-center text-indigo-500 font-bold"><i class="fa-solid fa-spinner fa-spin mr-2"></i> Cargando comprobantes...</td></tr>`;
+            
+            const q = construirQueryFiltrosURL();
+
+            try {
+                const res = await apiFetch(`/api/v1/facturas/?${q}`);
+                if(res.ok) { 
+                    facturasCache = await res.json(); 
+                    document.getElementById('cb-select-all').checked = false; 
+                    evaluarBotonBorradoMasivo(); 
+                    renderizarTablaFacturas(); 
+                    renderizarGraficosBI();
+                    cargarKPIsDashboard();
+                    cargarCentroFiscal();
+                }
+            } catch { tbody.innerHTML = `<tr><td colspan="13" class="p-8 text-center text-rose-500 font-bold">Error de conexión.</td></tr>`; }
+        }
+
+        function ejecutarFiltroTablaYAPI() {
+            paginaActual = 1;
+            renderizarTablaFacturas();
+        }
+
+        function renderizarTablaFacturas() {
+            const tbody = document.getElementById('tabla-facturas-body');
+            const filtro = (document.getElementById('filtro-auditoria')?.value || '').toLowerCase();
+
+            let datosFiltrados = facturasCache.filter(f => 
+                (f.proveedor && f.proveedor.toLowerCase().includes(filtro)) || 
+                (f.factura_num && f.factura_num.toLowerCase().includes(filtro)) || 
+                (f.nit_tercero && f.nit_tercero.includes(filtro)) ||
+                (f.descripcion_item && f.descripcion_item.toLowerCase().includes(filtro))
+            );
+
+            const totalRegistros = datosFiltrados.length;
+            if (totalRegistros === 0) { tbody.innerHTML = `<tr><td colspan="13" class="p-8 text-center text-gray-400 font-bold">No se encontraron comprobantes para el filtro seleccionado.</td></tr>`; document.getElementById('info-paginacion').innerText = "Sin registros"; return; }
+
+            let tamano = registrosPorPagina === "all" ? totalRegistros : parseInt(registrosPorPagina);
+            let totalPaginas = Math.ceil(totalRegistros / tamano) || 1;
+            if (paginaActual > totalPaginas) paginaActual = totalPaginas; if (paginaActual < 1) paginaActual = 1;
+
+            let inicio = (paginaActual - 1) * tamano; let fin = registrosPorPagina === "all" ? totalRegistros : Math.min(inicio + tamano, totalRegistros);
+            const datosVisuales = datosFiltrados.slice(inicio, fin);
+
+            document.getElementById('info-paginacion').innerText = `Página ${paginaActual} de ${totalPaginas} (${inicio + 1}-${fin} de ${totalRegistros})`;
+
+            tbody.innerHTML = datosVisuales.map((f) => {
+                const isChecked = seleccionadosSet.has(f.id_factura) ? 'checked' : '';
+                const esVenta = str(f.cuenta_gasto).startsWith('4');
+                const badgeNaturaleza = esVenta ? 
+                    `<span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-bold block w-max mt-1">Venta</span>` : 
+                    `<span class="bg-rose-100 text-rose-800 px-2 py-0.5 rounded text-[10px] font-bold block w-max mt-1">Compra</span>`;
+
+                return `
+                <tr class="border-b border-gray-100 hover:bg-gray-50 transition">
+                    <td class="p-3 text-center"><input type="checkbox" class="cb-factura w-4 h-4 accent-tlm-primary" value="${f.id_factura}" data-num="${f.factura_num}" ${isChecked} onchange="toggleCheckIndividual(this, ${f.id_factura})"></td>
+                    <td class="p-3 flex gap-1">
+                        <button onclick="verPDF('${f.factura_num}')" title="Ver PDF Soporte" class="bg-indigo-50 text-tlm-primary p-2 rounded-lg font-bold hover:bg-indigo-100 active:scale-95 transition"><i class="fa-solid fa-magnifying-glass"></i></button>
+                        <button onclick="eliminarFacturaIndividual(${f.id_factura}, '${f.factura_num}')" title="Eliminar Factura" class="bg-rose-50 text-rose-600 p-2 rounded-lg font-bold hover:bg-rose-100 active:scale-95 transition"><i class="fa-solid fa-trash"></i></button>
+                    </td>
+                    <td class="p-3">
+                        <span class="block font-bold text-tlm-primary">${f.factura_num}</span>
+                        ${badgeNaturaleza}
+                    </td>
+                    <td class="p-3 text-gray-500 font-mono text-[11px]">${f.fecha || 'N/A'}</td>
+                    <td class="p-3 max-w-[180px]">
+                        <span class="block font-bold text-gray-800 truncate" title="${f.proveedor}">${f.proveedor}</span>
+                        <span class="block text-[10px] text-gray-400 font-mono">NIT: ${f.nit_tercero}</span>
+                    </td>
+                    <td class="p-3 max-w-[220px]">
+                        <span class="block text-gray-700 font-semibold truncate" title="${f.descripcion_item}">${f.descripcion_item || 'Gasto General'}</span>
+                    </td>
+                    <td class="p-3 text-right font-mono text-gray-600">${f.cantidad || 1}</td>
+                    <td class="p-3 text-right font-mono text-gray-600">${formatCOP(f.valor_unitario)}</td>
+                    <td class="p-3 text-right font-bold text-gray-800">${formatCOP(f.subtotal)}</td>
+                    <td class="p-3 text-right font-mono text-emerald-600">${formatCOP(f.iva)}</td>
+                    <td class="p-3"><span class="inline-block px-2 py-0.5 rounded text-[10px] font-bold ${f.forma_pago === 'Crédito' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}">${f.forma_pago || 'Contado'}</span></td>
+                    <td class="p-3">
+                        <div class="flex items-center gap-1">
+                            <input type="text" id="cta-${f.id_factura}" value="${f.cuenta_gasto || '51953001'}" class="w-20 p-1 border border-gray-300 rounded text-xs font-mono font-bold text-tlm-primary focus:border-tlm-primary focus:outline-none" onchange="guardarCuentaIndividual(${f.id_factura}, this.value)">
+                            <button onclick="guardarCuentaProveedor('${f.nit_tercero}', document.getElementById('cta-${f.id_factura}').value)" title="Aplicar a todo el proveedor" class="text-gray-400 hover:text-tlm-primary transition p-1.5"><i class="fa-solid fa-clone"></i></button>
+                        </div>
+                    </td>
+                    <td class="p-3">
+                        <div class="flex items-center gap-1">
+                            <input type="number" id="rte-${f.id_factura}" value="${f.retencion_porc || 0}" step="0.1" min="0" max="100" class="w-16 p-1 border border-rose-300 rounded text-xs font-mono font-bold text-rose-600 bg-rose-50 focus:border-rose-500 focus:outline-none" onchange="guardarRetencionIndividual(${f.id_factura}, this.value)">
+                            <span class="text-rose-600 font-bold text-xs">%</span>
+                            <button onclick="guardarRetencionProveedor('${f.nit_tercero}', document.getElementById('rte-${f.id_factura}').value)" title="Aplicar retención a todo el proveedor" class="text-rose-400 hover:text-rose-600 transition p-1.5"><i class="fa-solid fa-clone"></i></button>
+                        </div>
+                    </td>
+                </tr>`
+            }).join('');
+        }
+
+        // VISOR DE PDF MULTITENANT
+        async function verPDF(factura_num) {
+            const modal = document.getElementById('modal-pdf-visor');
+            const container = document.getElementById('pdf-modal-container');
+            document.getElementById('pdf-modal-titulo').innerText = `Visor de Comprobante: ${factura_num}`;
+            container.innerHTML = `<div class="flex flex-col items-center justify-center p-12 text-tlm-primary"><i class="fa-solid fa-spinner fa-spin text-4xl mb-3"></i><p class="font-bold text-sm">Cargando soporte digital...</p></div>`;
+            modal.classList.remove('hidden');
+
+            try {
+                const res = await apiFetch(`/api/v1/facturas/pdf/${encodeURIComponent(factura_num)}?id_empresa=${empresaActivaId}`);
+                if (res.ok) { 
+                    const data = await res.json(); 
+                    container.innerHTML = `<iframe src="data:application/pdf;base64,${data.pdf_b64}#toolbar=0" class="w-full h-[75vh] border-none rounded-xl shadow-inner"></iframe>`; 
+                } else {
+                    container.innerHTML = `<div class="p-12 text-center text-rose-500 font-bold"><i class="fa-solid fa-file-circle-xmark text-4xl mb-2 block"></i>Soporte PDF no disponible.</div>`;
+                }
+            } catch { container.innerHTML = `<div class="p-12 text-center text-rose-500 font-bold"><i class="fa-solid fa-triangle-exclamation text-4xl mb-2 block"></i>Error de red al consultar el soporte.</div>`; }
+        }
+
+        function cerrarModalPDF() {
+            const modal = document.getElementById('modal-pdf-visor');
+            modal.classList.add('hidden');
+            document.getElementById('pdf-modal-container').innerHTML = '';
+        }
+
+        function cerrarModalPDFOutside(e) {
+            if (e.target.id === 'modal-pdf-visor') cerrarModalPDF();
+        }
+
+        // RECLASIFICACIÓN DE CUENTAS E IMPUESTOS
+        async function guardarCuentaIndividual(idFactura, nuevaCuenta) {
+            try {
+                const res = await apiFetch(`/api/v1/facturas/${idFactura}/cuenta`, { method: "PATCH", body: JSON.stringify({ cuenta_gasto: nuevaCuenta, aplicar_a_proveedor: false, id_empresa: empresaActivaId }) });
+                if (res.ok) { const index = facturasCache.findIndex(f => f.id_factura === idFactura); if(index !== -1) facturasCache[index].cuenta_gasto = nuevaCuenta; }
+            } catch {}
+        }
+
+        async function guardarCuentaProveedor(nitTercero, nuevaCuenta) {
+            if (!confirm(`¿Aplicar cuenta [${nuevaCuenta}] a todas las facturas del proveedor?`)) return;
+            try {
+                const res = await apiFetch(`/api/v1/facturas/0/cuenta`, { method: "PATCH", body: JSON.stringify({ cuenta_gasto: nuevaCuenta, aplicar_a_proveedor: true, nit_tercero: nitTercero, id_empresa: empresaActivaId }) });
+                if (res.ok) { cargarFacturasAPI(); }
+            } catch {}
+        }
+
+        async function guardarRetencionIndividual(idFactura, porcentaje) {
+            try {
+                const res = await apiFetch(`/api/v1/facturas/${idFactura}/retencion`, { method: "PATCH", body: JSON.stringify({ retencion_porc: parseFloat(porcentaje), aplicar_a_proveedor: false, id_empresa: empresaActivaId }) });
+                if (res.ok) {
+                    const index = facturasCache.findIndex(f => f.id_factura === idFactura); if(index !== -1) facturasCache[index].retencion_porc = parseFloat(porcentaje);
+                    cargarKPIsDashboard(); cargarCentroFiscal();
+                }
+            } catch {}
+        }
+
+        async function guardarRetencionProveedor(nitTercero, porcentaje) {
+            if (!confirm(`¿Aplicar ${porcentaje}% de retención a todas las facturas del proveedor?`)) return;
+            try {
+                const res = await apiFetch(`/api/v1/facturas/0/retencion`, { method: "PATCH", body: JSON.stringify({ retencion_porc: parseFloat(porcentaje), aplicar_a_proveedor: true, nit_tercero: nitTercero, id_empresa: empresaActivaId }) });
+                if (res.ok) { cargarFacturasAPI(); cargarKPIsDashboard(); cargarCentroFiscal(); }
+            } catch {}
+        }
+
+        function cambiarPagina(delta) { paginaActual += delta; renderizarTablaFacturas(); }
+        function cambiarTamanoPagina(val) { registrosPorPagina = val; paginaActual = 1; renderizarTablaFacturas(); }
+
+        function toggleSeleccionMasiva(source) {
+            document.querySelectorAll('.cb-factura').forEach(cb => {
+                cb.checked = source.checked;
+                if (source.checked) seleccionadosSet.add(parseInt(cb.value)); else seleccionadosSet.delete(parseInt(cb.value));
+            });
+            evaluarBotonBorradoMasivo();
+        }
+
+        function toggleCheckIndividual(cb, id) {
+            if (cb.checked) seleccionadosSet.add(id); else seleccionadosSet.delete(id);
+            evaluarBotonBorradoMasivo();
+        }
+
+        function evaluarBotonBorradoMasivo() {
+            const btn = document.getElementById('btn-borrado-masivo');
+            document.getElementById('contador-borrado').innerText = seleccionadosSet.size;
+            seleccionadosSet.size > 0 ? btn.classList.remove('hidden') : btn.classList.add('hidden');
+        }
+
+        async function eliminarFacturaIndividual(idFactura, numFactura) {
+            if (!confirm(`¿Eliminar factura ${numFactura}?`)) return;
+            try {
+                const res = await apiFetch(`/api/v1/facturas/${idFactura}`, { method: "DELETE" });
+                if (res.ok) { seleccionadosSet.delete(idFactura); cargarFacturasAPI(); cargarKPIsDashboard(); cargarCentroFiscal(); }
+            } catch {}
+        }
+
+        async function ejecutarBorradoMasivo() {
+            const ids = Array.from(seleccionadosSet); if (!confirm(`¿Eliminar masivamente las líneas seleccionadas?`)) return;
+            try {
+                const res = await apiFetch(`/api/v1/facturas/bulk-delete`, { method: "POST", body: JSON.stringify(ids) });
+                if (res.ok) { seleccionadosSet.clear(); cargarFacturasAPI(); cargarKPIsDashboard(); cargarCentroFiscal(); }
+            } catch {}
+        }
+
+        // ETL Y DESCARGAS
+        async function subirFacturas(files) {
+            if (!empresaActivaId) { alert("Selecciona un cliente."); return; }
+            if (!files.length) return;
+            const formData = new FormData(); formData.append("id_empresa", empresaActivaId); 
+            for (let i = 0; i < files.length; i++) formData.append("archivos", files[i]);
+            
+            document.getElementById('tabla-facturas-body').innerHTML = `<tr><td colspan="13" class="p-8 text-center text-indigo-600 font-bold"><i class="fa-solid fa-spinner fa-spin mr-2"></i> Procesando ETL...</td></tr>`;
+            try {
+                const res = await apiFetch(`/api/v1/facturas/upload`, { method: "POST", body: formData });
+                if (res.ok) { 
+                    const aud = await res.json(); alert(`📊 ETL Completado:\n✅ Registros: ${aud.facturas_procesadas}\n⚠️ Duplicadas omitidas: ${aud.facturas_duplicadas}`); 
+                }
+            } catch {}
+            cargarFacturasAPI(); cargarKPIsDashboard(); cargarCentroFiscal();
+        }
+
+        async function descargarAuditoriaExcel() { 
+            if (!empresaActivaId) return;
+            const btn = document.getElementById('btn-excel-auditoria'); const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Generando...</span>`;
+            
+            const q = construirQueryFiltrosURL();
+            try {
+                const res = await apiFetch(`/api/v1/facturas/export/auditoria?${q}`);
+                if (res.ok) {
+                    const url = window.URL.createObjectURL(await res.blob()); const a = document.createElement('a'); a.href = url; a.download = `Auditoria_TLM_${empresaActivaId}.xlsx`; document.body.appendChild(a); a.click(); document.body.removeChild(a); window.URL.revokeObjectURL(url);
+                }
+            } catch {} finally { btn.innerHTML = originalHTML; }
+        }
+        
+        async function descargarPlanoSiigo() { 
+            if (!empresaActivaId) return;
+            const btn = document.getElementById('btn-siigo-export'); const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Generando...</span>`;
+            
+            const q = construirQueryFiltrosURL();
+            try {
+                const res = await apiFetch(`/api/v1/facturas/export/siigo?${q}`);
+                if (res.ok) {
+                    const url = window.URL.createObjectURL(await res.blob()); const a = document.createElement('a'); a.href = url; a.download = `Interfaz_Siigo_${empresaActivaId}.csv`; document.body.appendChild(a); a.click(); document.body.removeChild(a); window.URL.revokeObjectURL(url);
+                }
+            } catch {} finally { btn.innerHTML = originalHTML; }
+        }
+
+        async function descargarSoportesPDF() {
+            if (!empresaActivaId) { alert("Por favor selecciona un cliente activo."); return; }
+
+            let facturasAExportar = [];
+            if (seleccionadosSet.size > 0) {
+                const numsSeleccionados = facturasCache.filter(f => seleccionadosSet.has(f.id_factura)).map(f => f.factura_num).filter(Boolean);
+                facturasAExportar = [...new Set(numsSeleccionados)];
+            }
+
+            if (facturasAExportar.length === 0) {
+                const todosNums = facturasCache.map(f => f.factura_num).filter(Boolean);
+                facturasAExportar = [...new Set(todosNums)];
+            }
+
+            if (facturasAExportar.length === 0) { alert("No hay comprobantes disponibles para exportar en este cliente."); return; }
+
+            const btn = document.getElementById('btn-descargar-pdfs'); const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Comprimiendo (${facturasAExportar.length} docs)...</span>`;
+
+            try {
+                const res = await apiFetch(`/api/v1/facturas/export/soportes-pdf`, { 
+                    method: "POST", 
+                    body: JSON.stringify({ id_empresa: empresaActivaId, facturas_seleccionadas: facturasAExportar }) 
+                });
+
+                if (res.ok) {
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob); 
+                    const a = document.createElement('a'); a.href = url; a.download = `Soportes_PDF_Empresa_${empresaActivaId}.zip`; 
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a); window.URL.revokeObjectURL(url);
+                } else {
+                    const err = await res.json().catch(() => ({ detail: "Error en el servidor." }));
+                    alert(`Atención al exportar soportes:\n${err.detail || 'Error en el servidor'}`);
+                }
+            } catch (error) { 
+                alert(`Error de red al intentar descargar el paquete comprimido.`); 
+            } finally { btn.innerHTML = originalHTML; }
+        }
+
+        async function cargarCentroFiscal() {
+            if(!empresaActivaId) return;
+            const container = document.getElementById('cajas-f350-container');
+            const q = construirQueryFiltrosURL();
+            try {
+                const res = await apiFetch(`/api/v1/facturas/impuestos/f350?${q}`);
+                if (res.ok) {
+                    const data = await res.json(); const casillas = data.casillas_f350;
+                    container.innerHTML = Object.keys(casillas).map(c => `
+                        <div class="p-3 bg-gray-50 border rounded-xl flex justify-between items-center text-xs">
+                            <div><span class="font-bold text-tlm-primary">Casilla ${c}</span><p class="text-gray-500 font-semibold">${casillas[c].concepto}</p></div>
+                            <div class="text-right"><span class="block font-bold text-gray-800">Base: ${formatCOP(casillas[c].base)}</span><span class="block font-black text-tlm-accent">Retención: ${formatCOP(casillas[c].retencion)}</span></div>
+                        </div>`).join('');
+                    document.getElementById('f350-total-nacional').innerText = formatCOP(data.total_retefuente_nacional);
+                    document.getElementById('f350-total-ica').innerText = formatCOP(data.total_reteica_territorial);
+                    document.getElementById('f350-total-reteiva').innerText = formatCOP(data.total_reteiva);
+                }
+            } catch {}
+        }
+
+        // CONCILIACIÓN BANCARIA Y CONVERTIDOR DIRECTO PDF A EXCEL
+        async function convertirPDFaExcelDirecto() { 
+            const f2 = document.getElementById('file-banco').files[0];
+            const banco = document.getElementById('select-banco-origen').value || "AUTO";
+
+            if (!f2 || !f2.name.toLowerCase().endsWith('.pdf')) { alert("Por favor selecciona un archivo PDF en Extracto Bancario."); return; }
+
+            const btn = document.getElementById('btn-convertir-pdf-excel'); const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Convertiendo PDF...</span>`;
+
+            const formData = new FormData(); formData.append("file_banco", f2); formData.append("banco_origen", banco);
+
+            try {
+                const res = await apiFetch(`/api/v1/facturas/conciliacion/pdf-a-excel`, { method: "POST", body: formData });
+                if (res.ok) {
+                    const url = window.URL.createObjectURL(await res.blob()); 
+                    const a = document.createElement('a'); a.href = url; a.download = f2.name.replace('.pdf', '') + '_Convertido.xlsx'; a.click();
+                } else {
+                    const err = await res.json(); alert(`Atención:\n${err.detail || "No se pudo convertir el PDF."}`);
+                }
+            } catch { alert("Error de red al intentar convertir el PDF."); } 
+            finally { btn.innerHTML = originalHTML; }
+        }
+        
+        async function ejecutarConciliacion() {
+            const f1 = document.getElementById('file-siigo').files[0]; 
+            const f2 = document.getElementById('file-banco').files[0];
+            const tol = document.getElementById('tolerancia-conciliacion').value || 100;
+            const banco = document.getElementById('select-banco-origen').value || "AUTO";
+
+            if (!f1 || !f2) { alert("Por favor selecciona el Auxiliar de Libros y el Extracto Bancario."); return; }
+            
+            const formData = new FormData(); 
+            formData.append("file_siigo", f1); formData.append("file_banco", f2); formData.append("tolerancia", tol); formData.append("banco_origen", banco);
+
+            const container = document.getElementById('resultado-conciliacion-card');
+            container.innerHTML = `<div class="p-12 text-indigo-600"><i class="fa-solid fa-spinner fa-spin text-4xl mb-3"></i><p class="font-bold text-sm">Cruzando información y analizando tolerancias...</p></div>`;
+            document.getElementById('btn-descargar-conciliacion-excel').classList.add('hidden');
+
+            try {
+                const res = await apiFetch(`/api/v1/facturas/conciliacion/ejecutar`, { method: "POST", body: formData });
+                if (res.ok) {
+                    datosConciliacionCache = await res.json();
+                    renderizarResultadosConciliacionEnPantalla(datosConciliacionCache);
+                    document.getElementById('btn-descargar-conciliacion-excel').classList.remove('hidden');
+                } else {
+                    const err = await res.json();
+                    container.innerHTML = `<p class="text-rose-500 font-bold text-xs p-8">${err.detail || "Error al procesar la conciliación."}</p>`;
+                }
+            } catch { container.innerHTML = `<p class="text-rose-500 font-bold p-8">Fallo de red al conectar con el servidor.</p>`; }
+        }
+
+        function renderizarResultadosConciliacionEnPantalla(data) {
+            const container = document.getElementById('resultado-conciliacion-card'); const r = data.resumen;
+            container.innerHTML = `
+            <div class="w-full space-y-4 text-left">
+                <div class="grid grid-cols-3 gap-3">
+                    <div class="bg-emerald-50 border border-emerald-200 p-3 rounded-xl text-center"><span class="block text-[10px] font-bold text-emerald-700 uppercase">Conciliados</span><span class="text-lg font-black text-emerald-800">${r.total_conciliados}</span></div>
+                    <div class="bg-rose-50 border border-rose-200 p-3 rounded-xl text-center"><span class="block text-[10px] font-bold text-rose-700 uppercase">Faltan en Libros</span><span class="text-lg font-black text-rose-800">${r.total_faltan_libros}</span></div>
+                    <div class="bg-amber-50 border border-amber-200 p-3 rounded-xl text-center"><span class="block text-[10px] font-bold text-amber-700 uppercase">Faltan en Banco</span><span class="text-lg font-black text-amber-800">${r.total_faltan_banco}</span></div>
+                </div>
+                <div class="flex border-b text-xs font-bold text-gray-500 pt-2">
+                    <button onclick="alternarTabConciliacion('conciliados')" id="tab-conc-c" class="pb-2 border-b-2 border-tlm-primary text-tlm-primary font-bold px-3">Partidas Conciliadas (${data.conciliados.length})</button>
+                    <button onclick="alternarTabConciliacion('libros')" id="tab-conc-l" class="pb-2 text-gray-400 hover:text-gray-600 px-3">Pendientes en Libros (${data.pendientes_banco.length})</button>
+                    <button onclick="alternarTabConciliacion('banco')" id="tab-conc-b" class="pb-2 text-gray-400 hover:text-gray-600 px-3">Pendientes en Banco (${data.pendientes_libros.length})</button>
+                </div>
+                <div id="contenedor-tabla-conciliacion" class="max-h-60 overflow-y-auto border rounded-xl">${generarTablaConciliadosHTML(data.conciliados)}</div>
+            </div>`;
+        }
+
+        function alternarTabConciliacion(tab) {
+            if(!datosConciliacionCache) return;
+            const container = document.getElementById('contenedor-tabla-conciliacion');
+            const btnC = document.getElementById('tab-conc-c'); const btnL = document.getElementById('tab-conc-l'); const btnB = document.getElementById('tab-conc-b');
+            [btnC, btnL, btnB].forEach(b => { if(b) b.className = "pb-2 text-gray-400 hover:text-gray-600 px-3 font-bold"; });
+
+            if(tab === 'conciliados') {
+                btnC.className = "pb-2 border-b-2 border-tlm-primary text-tlm-primary font-bold px-3";
+                container.innerHTML = generarTablaConciliadosHTML(datosConciliacionCache.conciliados);
+            } else if(tab === 'libros') {
+                btnL.className = "pb-2 border-b-2 border-tlm-primary text-tlm-primary font-bold px-3";
+                container.innerHTML = generarTablaPendientesHTML(datosConciliacionCache.pendientes_banco, "Movimientos del Banco que faltan por contabilizar");
+            } else if(tab === 'banco') {
+                btnB.className = "pb-2 border-b-2 border-tlm-primary text-tlm-primary font-bold px-3";
+                container.innerHTML = generarTablaPendientesHTML(datosConciliacionCache.pendientes_libros, "Movimientos contables pendientes de cobro o desembolso");
+            }
+        }
+
+        function generarTablaConciliadosHTML(lista) {
+            if(lista.length === 0) return `<p class="p-4 text-center text-xs text-gray-400">Sin registros.</p>`;
+            return `
+            <table class="w-full text-left text-[11px] text-gray-600">
+                <thead class="bg-gray-50 text-gray-500 sticky top-0 border-b">
+                    <tr><th class="p-2">Fecha</th><th class="p-2">Detalle Libros</th><th class="p-2 text-right">Valor</th><th class="p-2 text-right">Diferencia</th></tr>
+                </thead>
+                <tbody>
+                    ${lista.map(item => `
+                        <tr class="border-b hover:bg-gray-50">
+                            <td class="p-2 font-mono">${item.fecha_libros}</td>
+                            <td class="p-2 max-w-[200px] truncate" title="${item.desc_libros}">${item.desc_libros}</td>
+                            <td class="p-2 text-right font-bold text-gray-800">${formatCOP(item.valor_libros)}</td>
+                            <td class="p-2 text-right font-mono text-emerald-600">${formatCOP(item.diferencia)}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>`;
+        }
+
+        function generarTablaPendientesHTML(lista, titulo) {
+            if(lista.length === 0) return `<p class="p-4 text-center text-xs text-gray-400">Sin registros pendientes.</p>`;
+            return `
+            <table class="w-full text-left text-[11px] text-gray-600">
+                <thead class="bg-gray-50 text-gray-500 sticky top-0 border-b">
+                    <tr><th class="p-2">Fecha</th><th class="p-2">Descripción</th><th class="p-2 text-right">Valor</th></tr>
+                </thead>
+                <tbody>
+                    ${lista.map(item => `
+                        <tr class="border-b hover:bg-gray-50">
+                            <td class="p-2 font-mono">${item.fecha}</td>
+                            <td class="p-2 max-w-[220px] truncate" title="${item.descripcion}">${item.descripcion}</td>
+                            <td class="p-2 text-right font-bold ${item.valor < 0 ? 'text-rose-600' : 'text-gray-800'}">${formatCOP(item.valor)}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>`;
+        }
+
+        async function descargarConciliacionExcel() {
+            const f1 = document.getElementById('file-siigo').files[0]; 
+            const f2 = document.getElementById('file-banco').files[0];
+            const tol = document.getElementById('tolerancia-conciliacion').value || 100;
+            const banco = document.getElementById('select-banco-origen').value || "AUTO";
+
+            if (!f1 || !f2) return;
+
+            const btn = document.getElementById('btn-descargar-conciliacion-excel'); const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Generando Excel...</span>`;
+
+            const formData = new FormData(); formData.append("file_siigo", f1); formData.append("file_banco", f2); formData.append("tolerancia", tol); formData.append("banco_origen", banco);
+
+            try {
+                const res = await apiFetch(`/api/v1/facturas/conciliacion/descargar-excel`, { method: "POST", body: formData });
+                if (res.ok) {
+                    const url = window.URL.createObjectURL(await res.blob()); 
+                    const a = document.createElement('a'); a.href = url; a.download = "Conciliacion_Bancaria_TLM.xlsx"; a.click();
+                }
+            } catch {} finally { btn.innerHTML = originalHTML; }
+        }
+
+        // CEREBRO CONTABLE
+        async function purgarMemoria(tipo) {
+            if (!empresaActivaId) return;
+            if (!confirm(`⚠️ ATENCIÓN: ¿VACIAR ${tipo === 'puc' ? 'el PUC' : 'el Balance'} de este cliente?`)) return;
+            try {
+                const res = await apiFetch(`/api/v1/facturas/${tipo}/borrar?id_empresa=${empresaActivaId}`, { method: "DELETE" });
+                if (res.ok) {
+                    const data = await res.json(); alert(`✅ ${data.mensaje}`);
+                    if(tipo === 'puc') document.getElementById('file-puc').value = "";
+                    if(tipo === 'balance') document.getElementById('file-balance').value = "";
+                }
+            } catch {}
+        }
+
+        async function subirPUC() {
+            if (!empresaActivaId) return;
+            const file = document.getElementById('file-puc').files[0]; if (!file) return;
+            const btn = document.getElementById('btn-subir-puc'); const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Mapeando...</span>`;
+            const formData = new FormData(); formData.append("id_empresa", empresaActivaId); formData.append("archivo", file);
+            try {
+                const res = await apiFetch(`/api/v1/facturas/puc/upload`, { method: "POST", body: formData });
+                if (res.ok) { const data = await res.json(); alert(`✅ ${data.mensaje}\nCuentas: ${data.registros_procesados}`); }
+            } catch {} finally { btn.innerHTML = originalHTML; }
+        }
+
+        async function subirBalancePrueba() {
+            if (!empresaActivaId) return;
+            const file = document.getElementById('file-balance').files[0]; if (!file) return;
+            const btn = document.getElementById('btn-subir-balance'); const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Mapeando...</span>`;
+            const formData = new FormData(); formData.append("id_empresa", empresaActivaId); formData.append("archivo", file);
+            try {
+                const res = await apiFetch(`/api/v1/facturas/balance/upload`, { method: "POST", body: formData });
+                if (res.ok) { const data = await res.json(); alert(`✅ ${data.mensaje}\nLíneas: ${data.registros_procesados}`); }
+            } catch {} finally { btn.innerHTML = originalHTML; }
+        }
+
+        // GOBERNANZA DE USUARIOS Y CONTROL DE ACCESOS (RLS MAESTRO)
+        async function cargarUsuariosGobernanza() {
+            const tbody = document.getElementById('tbody-usuarios-gobernanza');
+            if(!tbody) return;
+            tbody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-gray-400 font-bold"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Cargando directorio de usuarios...</td></tr>';
+            
+            try {
+                let res = await apiFetch(`/api/v1/usuarios`);
+                if (!res.ok) res = await apiFetch(`/api/v1/auth/usuarios`);
+
+                if (res.ok) {
+                    const usuarios = await res.json();
+                    if(!Array.isArray(usuarios) || usuarios.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-gray-400 font-bold">No hay usuarios registrados.</td></tr>';
+                        return;
+                    }
+
+                    tbody.innerHTML = usuarios.map(u => {
+                        const uid = u.id_usuario || u.id;
+                        const nombre = u.nombre_completo || u.nombre || u.email;
+                        const email = u.email || u.correo;
+                        const esActivo = u.activo;
+
+                        return `
+                        <tr class="border-b hover:bg-gray-50">
+                            <td class="p-3 font-bold text-gray-800">${nombre}</td>
+                            <td class="p-3 text-gray-600">${email}</td>
+                            <td class="p-3">
+                                <span class="px-2.5 py-1 rounded-full text-[10px] font-bold ${esActivo ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">
+                                    ${esActivo ? 'Aprobado' : 'Pendiente'}
+                                </span>
+                            </td>
+                            <td class="p-3 text-center">
+                                <button onclick="abrirModalAsignacion(${uid})" class="bg-indigo-50 text-tlm-primary px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-100 active:scale-95 transition" ${!esActivo ? 'disabled title="Apruebe primero al usuario"' : ''}>
+                                    <i class="fa-solid fa-building-user mr-1"></i> Asignar
+                                </button>
+                            </td>
+                            <td class="p-3 text-center space-x-2">
+                                ${!esActivo ? `
+                                    <button onclick="aprobarUsuario(${uid})" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded-lg text-xs font-bold active:scale-95 transition"><i class="fa-solid fa-check mr-1"></i> Aprobar</button>
+                                ` : `
+                                    <span class="text-xs text-emerald-600 font-bold me-2"><i class="fa-solid fa-circle-check mr-1"></i> Activo</span>
+                                `}
+                                <button onclick="eliminarUsuario(${uid})" class="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1 rounded-lg text-xs font-bold active:scale-95 transition"><i class="fa-solid fa-trash mr-1"></i> Eliminar</button>
+                            </td>
+                        </tr>`;
+                    }).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-rose-500 font-bold">Error al consultar la lista de usuarios.</td></tr>';
+                }
+            } catch {
+                tbody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-rose-500 font-bold">Error de red al cargar usuarios.</td></tr>';
+            }
+        }
+
+        async function abrirModalAsignacion(idUsuario) {
+            idUsuarioParaAsignar = idUsuario; 
+            const contenedor = document.getElementById('lista-clientes-asignacion');
+            document.getElementById('modal-asignar-clientes').classList.remove('hidden');
+            contenedor.innerHTML = '<p class="text-xs text-center text-gray-400 py-4"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Cargando portafolio de clientes...</p>';
+
+            try {
+                // SOLUCIÓN AL MODAL:
+                // 1. Petición al Catálogo Maestro Global de Empresas (sin filtro de email para obtener las 6-7 empresas)
+                // 2. Petición a las empresas actualmente asignadas al usuario objetivo
+                const [resG, resA] = await Promise.all([
+                    apiFetch(`/api/v1/empresas`),
+                    apiFetch(`/api/v1/usuarios/${idUsuario}/empresas`)
+                ]);
+
+                let empGlobales = resG.ok ? await resG.json() : [];
+                let accActuales = resA.ok ? await resA.json() : [];
+
+                // Extraer Set de IDs de las empresas previamente asignadas
+                const setIdsAsignados = new Set(
+                    accActuales.map(e => typeof e === 'object' ? (e.id_empresa || e.id) : e)
+                );
+
+                if(!Array.isArray(empGlobales) || empGlobales.length === 0) {
+                    contenedor.innerHTML = '<p class="text-xs text-center text-amber-600 font-bold py-3">No hay empresas registradas en la base de datos.</p>';
+                    return;
+                }
+
+                contenedor.innerHTML = empGlobales.map(emp => {
+                    const empId = emp.id_empresa || emp.id;
+                    const isChecked = setIdsAsignados.has(empId) ? 'checked' : '';
+                    const nomEmp = emp.nombre_comercial || emp.razon_social;
+
+                    return `
+                    <label class="flex items-center gap-3 p-2 hover:bg-gray-50 border rounded-lg cursor-pointer transition">
+                        <input type="checkbox" class="cb-acceso-empresa w-4 h-4 accent-emerald-600" value="${empId}" ${isChecked}>
+                        <div>
+                            <span class="block font-bold text-gray-800 text-sm leading-none">${nomEmp}</span>
+                            <span class="text-[10px] text-gray-400 font-mono">NIT: ${emp.nit}</span>
+                        </div>
+                    </label>`;
+                }).join('');
+
+            } catch (err) {
+                console.error("Error al cargar empresas asignadas:", err);
+                contenedor.innerHTML = '<p class="text-xs text-center text-rose-500 font-bold py-3">Error al conectar con la API para obtener permisos.</p>';
+            }
+        }
+
+        function cerrarModalAsignacion() { document.getElementById('modal-asignar-clientes').classList.add('hidden'); }
+
+        async function guardarAsignacion() {
+            if (!idUsuarioParaAsignar) return;
+            const empresaIds = Array.from(document.querySelectorAll('.cb-acceso-empresa:checked')).map(cb => parseInt(cb.value));
+
+            try {
+                const res = await apiFetch(`/api/v1/usuarios/${idUsuarioParaAsignar}/empresas`, { 
+                    method: "POST", 
+                    body: JSON.stringify({ empresas: empresaIds, empresas_ids: empresaIds }) 
+                });
+
+                if (res.ok) { 
+                    alert("✅ Permisos RLS actualizados exitosamente."); 
+                    cerrarModalAsignacion(); 
+                    if(typeof cargarListaEmpresas === 'function') await cargarListaEmpresas();
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    alert("Error al actualizar permisos: " + (err.detail || err.mensaje || "Error en el servidor"));
+                }
+            } catch (err) {
+                alert("Error de red al intentar guardar asignación.");
+            }
+        }
+
+        async function aprobarUsuario(idUsuario) { 
+            try { 
+                let res = await apiFetch(`/api/v1/usuarios/${idUsuario}/aprobar`, { 
+                    method: "POST", 
+                    body: JSON.stringify({ activo: true }) 
+                });
+                
+                if (!res.ok) {
+                    res = await apiFetch(`/api/v1/auth/usuarios/${idUsuario}/aprobar`, { method: "PATCH" });
+                }
+
+                if(res.ok) {
+                    alert("✅ Usuario aprobado exitosamente.");
+                    cargarUsuariosGobernanza(); 
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    alert("No se pudo aprobar el usuario: " + (err.detail || "Error en el servidor"));
+                }
+            } catch {
+                alert("Error de conexión al aprobar el usuario.");
+            } 
+        }
+
+        async function eliminarUsuario(idUsuario) { 
+            if(confirm("¿Eliminar definitivamente este usuario?")) { 
+                try { 
+                    let res = await apiFetch(`/api/v1/usuarios/${idUsuario}`, { method: "DELETE" }); 
+                    if(!res.ok) res = await apiFetch(`/api/v1/auth/usuarios/${idUsuario}`, { method: "DELETE" });
+
+                    if(res.ok) {
+                        alert("✅ Usuario eliminado correctamente.");
+                        cargarUsuariosGobernanza(); 
+                    } else {
+                        alert("Error al eliminar el usuario.");
+                    }
+                } catch {
+                    alert("Error de conexión al eliminar usuario.");
+                } 
+            } 
+        }
+
+        // INICIALIZACIÓN DE LA APLICACIÓN
+        verificarSesionGuard();
+    </script>
+</body>
+</html>
