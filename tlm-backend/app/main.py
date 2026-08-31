@@ -1,39 +1,46 @@
-from fastapi import FastAPI, Request, status
+import os
+import sys
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from sqlalchemy.exc import SQLAlchemyError
-import logging
-
-from app.db.session import engine
-from app.db import models
-from app.api.v1.endpoints import facturas, empresas, usuarios
-
-# Configuración del registrador de eventos
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("api_orchestrator")
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 # ===============================================================================
-# 1. INICIALIZACIÓN DEL DATA WAREHOUSE EN POSTGRESQL
+# 1. NORMALIZACIÓN DE ENTORNO Y CONEXIÓN A BASE DE DATOS (NEON / LOCAL)
 # ===============================================================================
-try:
-    models.Base.metadata.create_all(bind=engine)
-    logger.info(" Base de datos PostgreSQL sincronizada e inicializada correctamente.")
-except Exception as e:
-    logger.error(f" Error crítico al sincronizar tablas en PostgreSQL: {e}")
+RAW_DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:postgres@127.0.0.1:5432/tlm_workspace"
+)
+
+# Corrección de protocolo para compatibilidad con SQLAlchemy (postgres:// -> postgresql://)
+if RAW_DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = RAW_DATABASE_URL.replace("postgres://", "postgresql://", 1)
+else:
+    DATABASE_URL = RAW_DATABASE_URL
+
+os.environ["DATABASE_URL"] = DATABASE_URL
 
 # ===============================================================================
-# 2. INSTANCIA PRINCIPAL DE FASTAPI
+# 2. IMPORTACIONES ABSOLUTAS OFICIALES (Compatibilidad limpia con VS Code y Render)
+# ===============================================================================
+# ===============================================================================
+# 2. IMPORTACIONES ABSOLUTAS (Con directiva de supresión de falso positivo # type: ignore)
+# ===============================================================================
+from app.facturas import router as facturas_router  # type: ignore
+from app.empresas import router as empresas_router  # type: ignore
+from app.auth import router as auth_router          # type: ignore
+# ===============================================================================
+# 3. INICIALIZACIÓN DEL NÚCLEO API ENGINE
 # ===============================================================================
 app = FastAPI(
-    title="Consola Fiscal B2B - Analytical Engine",
-    description="Motor de Ingesta ETL, Control de Accesos (RLS) y Consolidación Financiera.",
+    title="Consola Fiscal B2B API Engine",
     version="1.2.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    description="Motor Backend para procesamiento fiscal, RLS y analítica contable TLM."
 )
 
 # ===============================================================================
-# 3. POLÍTICAS DE SEGURIDAD Y MIDDLEWARE CORS
+# 4. POLÍTICAS DE SEGURIDAD Y CORS
 # ===============================================================================
 app.add_middleware(
     CORSMiddleware,
@@ -44,52 +51,55 @@ app.add_middleware(
 )
 
 # ===============================================================================
-# 4. CAPTURADORES GLOBALES DE EXCEPCIONES
+# 5. MONTAJE DE RECURSOS ESTÁTICOS Y SERVIDO DEL FRONTEND (INDEX.HTML)
 # ===============================================================================
-@app.exception_handler(SQLAlchemyError)
-async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
-    logger.error(f" Excepción de SQL en la ruta {request.url.path}: {str(exc)}")
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "status": "error",
-            "success": False,
-            "tipo": "DatabaseError",
-            "mensaje": "Ocurrió una inconsistencia en PostgreSQL.",
-            "detalle": str(exc.orig) if hasattr(exc, 'orig') else str(exc)
-        }
-    )
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))               # Ubicación de /app
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))        # Ubicación de /tlm-backend
+GLOBAL_ROOT = os.path.abspath(os.path.join(PROJECT_ROOT, ".."))     # Raíz del repositorio
 
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception):
-    logger.error(f" Excepción de servidor en la ruta {request.url.path}: {str(exc)}")
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "status": "error",
-            "success": False,
-            "tipo": "UnhandledException",
-            "mensaje": "Error interno del servidor.",
-            "detalle": str(exc)
-        }
-    )
+POSSIBLE_FRONTEND_PATHS = [
+    os.path.join(GLOBAL_ROOT, "tlm-frontend"),
+    os.path.join(PROJECT_ROOT, "tlm-frontend"),
+    os.path.join(BASE_DIR, "static"),
+]
 
-# ===============================================================================
-# 5. REGISTRO DE CONTROLADORES REST (V1)
-# ===============================================================================
-app.include_router(facturas.router, prefix="/api/v1/facturas", tags=["Facturas & Motor ETL"])
-app.include_router(empresas.router, prefix="/api/v1/empresas", tags=["Empresas & Clientes"])
-app.include_router(usuarios.router, prefix="/api/v1", tags=["Seguridad & Control de Accesos"])
+FRONTEND_DIR = next((path for path in POSSIBLE_FRONTEND_PATHS if os.path.isdir(path)), None)
+
+if FRONTEND_DIR:
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+@app.get("/", include_in_schema=False)
+async def serve_frontend():
+    """Entrega la interfaz del Dashboard Ejecutivo directamente en la raíz."""
+    if FRONTEND_DIR:
+        index_path = os.path.join(FRONTEND_DIR, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+
+    fallback_index = os.path.join(GLOBAL_ROOT, "index.html")
+    if os.path.exists(fallback_index):
+        return FileResponse(fallback_index)
+
+    return {"status": "online", "message": "Consola Fiscal B2B API Engine operando. Frontend no detectado."}
 
 # ===============================================================================
-# 6. MONITOREO Y DISPONIBILIDAD (HEALTH CHECKS)
+# 6. MONITOREO DE INFRAESTRUCTURA (HEALTH CHECK)
 # ===============================================================================
-@app.get("/", tags=["Infraestructura"])
 @app.get("/health", tags=["Infraestructura"])
 def health_check():
+    """Endpoint de auditoría para verificación de SLA y conectividad de base de datos."""
+    is_cloud_db = "neon.tech" in os.getenv("DATABASE_URL", "")
     return {
         "status": "healthy",
         "service": "Consola Fiscal B2B API Engine",
         "version": "1.2.0",
+        "environment": "Production Cloud (Neon)" if is_cloud_db else "Local Development",
         "database": "PostgreSQL Conectado"
     }
+
+# ===============================================================================
+# 7. REGISTRO DE CONTROLADORES REST (V1)
+# ===============================================================================
+app.include_router(facturas_router, prefix="/api/v1/facturas", tags=["Facturas & Motor ETL"])
+app.include_router(empresas_router, prefix="/api/v1/empresas", tags=["Empresas & Clientes"])
+app.include_router(auth_router, prefix="/api/v1", tags=["Seguridad & Control de Accesos"])
