@@ -1,70 +1,29 @@
-import os
-import sys
-from pathlib import Path
-from fastapi import FastAPI, Request, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from sqlalchemy.exc import SQLAlchemyError
+# ===============================================================================
+# ARCHIVO: tlm-backend/app/main.py
+# ORQUESTRADOR PRINCIPAL CON AUTOSANACIÓN DE ESQUEMA POSTGRESQL & AUTO-SEEDING
+# ===============================================================================
 import logging
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-# ===============================================================================
-# 1. RESOLUCIÓN DE RUTAS Y NORMALIZACIÓN SYS.PATH
-# ===============================================================================
-CURRENT_FILE = Path(__file__).resolve()
-APP_DIR = CURRENT_FILE.parent               # .../tlm-backend/app
-PROJECT_ROOT = APP_DIR.parent              # .../tlm-backend
-
-for path_str in [str(PROJECT_ROOT), str(APP_DIR)]:
-    if path_str not in sys.path:
-        sys.path.insert(0, path_str)
-
-# ===============================================================================
-# 2. NORMALIZACIÓN DE DATABASE_URL (POSTGRESQL NEON CLOUD)
-# ===============================================================================
-RAW_DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@127.0.0.1:5432/tlm_workspace"
-)
-
-# Adecuación de protocolo para SQLAlchemy (postgres:// -> postgresql://)
-if RAW_DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = RAW_DATABASE_URL.replace("postgres://", "postgresql://", 1)
-else:
-    DATABASE_URL = RAW_DATABASE_URL
-
-# Forzar parametrización SSL para clústeres Neon Cloud
-if "neon.tech" in DATABASE_URL and "sslmode" not in DATABASE_URL:
-    DATABASE_URL += "&sslmode=require" if "?" in DATABASE_URL else "?sslmode=require"
-
-os.environ["DATABASE_URL"] = DATABASE_URL
-
-# ===============================================================================
-# 3. IMPORTACIÓN DE MÓDULOS DE NÚCLEO Y CONTROLADORES REST
-# ===============================================================================
-from app.db.session import engine
+from app.db.session import engine, Base, SessionLocal
 from app.db import models
-from app.api.v1.endpoints import facturas, empresas, usuarios
+from app.api.v1.endpoints import facturas, empresas, auth
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api_orchestrator")
 
-# Sincronización de esquemas en PostgreSQL con captura de excepciones
-try:
-    models.Base.metadata.create_all(bind=engine)
-    logger.info(" Base de datos PostgreSQL sincronizada e inicializada correctamente.")
-except Exception as e:
-    logger.error(f" Error crítico al sincronizar tablas en PostgreSQL: {e}")
-
-# ===============================================================================
-# 4. INICIALIZACIÓN DE FASTAPI Y POLÍTICAS CORS
-# ===============================================================================
 app = FastAPI(
-    title="Consola Fiscal B2B - Analytical Engine",
-    description="Motor de Ingesta ETL, Control de Accesos (RLS) y Consolidación Financiera.",
-    version="1.2.0"
+    title="Consola TLM - Motor Fiscal & BI",
+    version="2.1.0",
+    description="API REST B2B para auditoría contable, conciliación bancaria y liquidación F350"
 )
 
+# -------------------------------------------------------------------------------
+# 1. POLÍTICAS CORS (CROSS-ORIGIN RESOURCE SHARING)
+# -------------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -73,76 +32,101 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ===============================================================================
-# 5. MANEJADORES GLOBALES DE EXCEPCIONES
-# ===============================================================================
-@app.exception_handler(SQLAlchemyError)
-async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
-    logger.error(f" Excepción de SQL en la ruta {request.url.path}: {str(exc)}")
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "status": "error",
-            "success": False,
-            "tipo": "DatabaseError",
-            "mensaje": "Ocurrió una inconsistencia en PostgreSQL.",
-            "detalle": str(exc.orig) if hasattr(exc, 'orig') else str(exc)
-        }
-    )
+# -------------------------------------------------------------------------------
+# 2. ENRUTADORES DE API REST
+# -------------------------------------------------------------------------------
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["Seguridad & Autenticación"])
+app.include_router(empresas.router, prefix="/api/v1/empresas", tags=["Gestión Multi-Tenant"])
+app.include_router(facturas.router, prefix="/api/v1/facturas", tags=["Motor ETL & Auditoría"])
 
-# ===============================================================================
-# 6. REGISTRO DE CONTROLADORES REST (V1)
-# ===============================================================================
-app.include_router(facturas.router, prefix="/api/v1/facturas", tags=["Facturas & Motor ETL"])
-app.include_router(empresas.router, prefix="/api/v1/empresas", tags=["Empresas & Clientes"])
-app.include_router(usuarios.router, prefix="/api/v1/auth", tags=["Seguridad & Control de Accesos"])
+# -------------------------------------------------------------------------------
+# 3. EVENTO DE ARRANQUE (STARTUP): MIGRACIÓN Y SIEMBRA EN NEON CLOUD
+# -------------------------------------------------------------------------------
+@app.on_event("startup")
+def sincronizar_esquema_y_sembrar_datos():
+    """
+    Inspecciona la estructura física en PostgreSQL. Si detecta columnas ausentes,
+    corrige el esquema automáticamente en Render e inyecta la semilla inicial.
+    """
+    logger.info("[Startup] Inspeccionando estructura física en PostgreSQL Neon...")
+    
+    try:
+        with engine.connect() as conn:
+            with conn.begin():
+                # Verificar si la columna hashed_password existe físicamente en usuarios
+                resultado = conn.execute(text("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name='usuarios' AND column_name='hashed_password';
+                """)).fetchone()
+                
+                # Si la columna no existe, purgamos el esquema desalineado
+                if not resultado:
+                    logger.warn("⚠️ [Migración] Desfase detectado en 'usuarios'. Reconstruyendo esquema público...")
+                    conn.execute(text("DROP SCHEMA public CASCADE;"))
+                    conn.execute(text("CREATE SCHEMA public;"))
+                    conn.execute(text("GRANT ALL ON SCHEMA public TO public;"))
+                    logger.info("✅ [Migración] Esquema reconstruido correctamente.")
 
-# ===============================================================================
-# 7. SERVIDO DEL FRONTEND Y HEALTH CHECKS (COMPATIBILIDAD GET / HEAD)
-# ===============================================================================
-GLOBAL_ROOT = PROJECT_ROOT.parent
+        # Reconstruir las tablas con la estructura limpia de models.py
+        Base.metadata.create_all(bind=engine)
+        logger.info("✅ [Startup] Modelos ORM sincronizados con la base de datos.")
 
-POSSIBLE_FRONTEND_PATHS = [
-    os.path.join(GLOBAL_ROOT, "tlm-frontend"),
-    os.path.join(PROJECT_ROOT, "tlm-frontend"),
-    os.path.join(APP_DIR, "static"),
-]
+        # Inyección de Semilla de Datos (Auto-Seeding)
+        db: Session = SessionLocal()
+        try:
+            # 1. Sembrar Administrador Maestro
+            admin = db.query(models.Usuario).filter(models.Usuario.email == "admin@tlm.com").first()
+            if not admin:
+                from app.api.v1.endpoints.auth import obtener_hash_password
+                admin = models.Usuario(
+                    nombre_completo="Administrador Maestro TLM",
+                    email="admin@tlm.com",
+                    hashed_password=obtener_hash_password("admin123"),
+                    rol="Administrador",
+                    activo=True
+                )
+                db.add(admin)
+                db.commit()
+                db.refresh(admin)
+                logger.info("✅ [Seeding] Usuario creado: admin@tlm.com / admin123")
 
-FRONTEND_DIR = next((path for path in POSSIBLE_FRONTEND_PATHS if os.path.isdir(path)), None)
+            # 2. Sembrar Empresa Demo
+            empresa = db.query(models.Empresa).first()
+            if not empresa:
+                empresa = models.Empresa(
+                    nombre_comercial="TLM Consulting S.A.S. (Demo)",
+                    nit="901234567-8",
+                    software_erp="SIIGO_NUBE",
+                    software_destino="SIIGO_NUBE"
+                )
+                db.add(empresa)
+                db.commit()
+                db.refresh(empresa)
+                logger.info("✅ [Seeding] Empresa Demo creada: TLM Consulting S.A.S. (Demo)")
 
-if FRONTEND_DIR:
-    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+            # 3. Vincular matriz de permisos Multi-Tenant
+            if empresa not in admin.empresas_asociadas:
+                admin.empresas_asociadas.append(empresa)
+                db.commit()
+                logger.info("✅ [Seeding] Permisos Multi-Tenant vinculados con éxito.")
 
-# Soporte explícito de métodos GET y HEAD para evitar el error 405 en Render
-@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
-async def serve_frontend(request: Request):
-    """Entrega el archivo index.html deshabilitando caché para actualizar el cliente."""
-    if FRONTEND_DIR:
-        index_path = os.path.join(FRONTEND_DIR, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(
-                index_path,
-                headers={
-                    "Cache-Control": "no-cache, no-store, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0"
-                }
-            )
+        except Exception as exc_db:
+            db.rollback()
+            logger.error(f"❌ [Seeding] Error en la transacción de datos: {str(exc_db)}")
+        finally:
+            db.close()
 
-    fallback_index = os.path.join(GLOBAL_ROOT, "index.html")
-    if os.path.exists(fallback_index):
-        return FileResponse(fallback_index)
+    except Exception as exc_startup:
+        logger.error(f"❌ [Startup] Error crítico durante la sincronización: {str(exc_startup)}")
 
-    return {"status": "healthy", "service": "Consola Fiscal B2B API Engine"}
-
-@app.api_route("/health", methods=["GET", "HEAD"], tags=["Infraestructura"])
-def health_check(request: Request):
-    """Endpoint de auditoría técnica SLA."""
-    is_cloud_db = "neon.tech" in os.getenv("DATABASE_URL", "")
+# -------------------------------------------------------------------------------
+# 4. HEALTH CHECK
+# -------------------------------------------------------------------------------
+@app.get("/health", tags=["Infraestructura"])
+def health_check():
     return {
-        "status": "healthy",
-        "service": "Consola Fiscal B2B API Engine",
-        "version": "1.2.0",
-        "environment": "Production Cloud (Neon)" if is_cloud_db else "Local Development",
-        "database": "PostgreSQL Conectado"
+        "status": "online",
+        "entorno": "desarrollo",
+        "motor": "FastAPI + SQLAlchemy + PostgreSQL Neon"
     }
