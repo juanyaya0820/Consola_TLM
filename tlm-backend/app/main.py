@@ -6,13 +6,26 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 # ===============================================================================
-# 1. ENTORNO Y BASE DE DATOS (NEON CLOUD / LOCAL)
+# 1. NORMALIZACIÓN PREVIA DE RUTAS DE SISTEMA (CRÍTICO PARA RENDER / LINUX)
+# ===============================================================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))               # Ruta de /app
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))        # Ruta de /tlm-backend
+
+# Se inyecta la raíz del proyecto al inicio del path de Python
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+# ===============================================================================
+# 2. GESTIÓN DE VARIABLE DE ENTORNO PARA BASE DE DATOS (NEON CLOUD / LOCAL)
 # ===============================================================================
 RAW_DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:postgres@127.0.0.1:5432/tlm_workspace"
 )
 
+# Normalización del esquema de conexión de Postgres para SQLAlchemy
 if RAW_DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = RAW_DATABASE_URL.replace("postgres://", "postgresql://", 1)
 else:
@@ -21,28 +34,14 @@ else:
 os.environ["DATABASE_URL"] = DATABASE_URL
 
 # ===============================================================================
-# 2. RESOLUCIÓN DINÁMICA DE RUTAS (Soporte Multiplataforma Windows/Linux)
+# 3. IMPORTACIÓN DIRECTA DE CONTROLADORES (SIN ENMASCARAMIENTO DE EXCEPCIONES)
 # ===============================================================================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))               # Ruta de /app
-PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))        # Ruta de /tlm-backend
-
-# Inyección de rutas de búsqueda en sys.path para Render y Uvicorn
-for path in [PROJECT_ROOT, BASE_DIR]:
-    if path not in sys.path:
-        sys.path.insert(0, path)
-
-# Carga híbrida tolerante a estructura de módulos
-try:
-    from app.facturas import router as facturas_router
-    from app.empresas import router as empresas_router
-    from app.auth import router as auth_router
-except ModuleNotFoundError:
-    from facturas import router as facturas_router
-    from empresas import router as empresas_router
-    from auth import router as auth_router
+from app.facturas import router as facturas_router
+from app.empresas import router as empresas_router
+from app.auth import router as auth_router
 
 # ===============================================================================
-# 3. INICIALIZACIÓN DEL NÚCLEO API ENGINE
+# 4. INICIALIZACIÓN DE LA APLICACIÓN FASTAPI
 # ===============================================================================
 app = FastAPI(
     title="Consola Fiscal B2B API Engine",
@@ -50,9 +49,6 @@ app = FastAPI(
     description="Motor Backend para procesamiento fiscal, RLS y analítica contable TLM."
 )
 
-# ===============================================================================
-# 4. POLÍTICAS DE SEGURIDAD Y CORS
-# ===============================================================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -62,7 +58,7 @@ app.add_middleware(
 )
 
 # ===============================================================================
-# 5. MONTAJE DE RECURSOS ESTÁTICOS Y FRONTEND
+# 5. MONTAJE Y SERVIDO DEL FRONTEND (INDEX.HTML)
 # ===============================================================================
 GLOBAL_ROOT = os.path.abspath(os.path.join(PROJECT_ROOT, ".."))
 
@@ -89,10 +85,10 @@ async def serve_frontend():
     if os.path.exists(fallback_index):
         return FileResponse(fallback_index)
 
-    return {"status": "online", "message": "Consola Fiscal B2B API Engine operando. Frontend no detectado."}
+    return {"status": "online", "message": "Consola Fiscal B2B API Engine operando. Frontend no montado."}
 
 # ===============================================================================
-# 6. MONITOREO DE INFRAESTRUCTURA (HEALTH CHECK)
+# 6. VERIFICACIÓN TÉCNICA DE SALUD DE INFRAESTRUCTURA
 # ===============================================================================
 @app.get("/health", tags=["Infraestructura"])
 def health_check():
