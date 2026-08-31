@@ -1,49 +1,43 @@
 import os
-from pathlib import Path
-from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.engine import URL
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker
 
-# 1. Carga de variables de entorno
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-ENV_PATH = BASE_DIR / ".env"
-load_dotenv(dotenv_path=ENV_PATH, override=True)
-
-# 2. Extracción de variables de conexión individuales
-DB_USER = os.getenv("POSTGRES_USER", "postgres")
-DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "Juan0820*")
-DB_HOST = os.getenv("POSTGRES_SERVER", "127.0.0.1")
-DB_PORT = int(os.getenv("POSTGRES_PORT", 5432))
-DB_NAME = os.getenv("POSTGRES_DB", "tlm_workspace")
-
-# 3. Construcción segura de la URL (Evita errores de caracteres especiales como '*')
-connection_url = URL.create(
-    drivername="postgresql+psycopg2",
-    username=DB_USER,
-    password=DB_PASSWORD,
-    host=DB_HOST,
-    port=DB_PORT,
-    database=DB_NAME,
+# ===============================================================================
+# 1. RESOLUCIÓN DE VARIABLE DE ENTORNO (NEON CLOUD / LOCAL)
+# ===============================================================================
+RAW_DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:postgres@127.0.0.1:5432/tlm_workspace"
 )
 
-print(f"🔗 [DB ENGINE] Conectando a {DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}")
+# Adecuación de esquema para SQLAlchemy (postgres:// -> postgresql://)
+if RAW_DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = RAW_DATABASE_URL.replace("postgres://", "postgresql://", 1)
+else:
+    DATABASE_URL = RAW_DATABASE_URL
 
-Base = declarative_base()
+# Forzar requerimiento de SSL si la conexión va dirigida a la nube de Neon
+if "neon.tech" in DATABASE_URL and "sslmode" not in DATABASE_URL:
+    if "?" in DATABASE_URL:
+        DATABASE_URL += "&sslmode=require"
+    else:
+        DATABASE_URL += "?sslmode=require"
 
-# 4. Inicialización del motor con reconexión activa y manejo de tiempos de espera
+# ===============================================================================
+# 2. CONFIGURACIÓN DEL MOTOR SQLALCHEMY (POOL PRE-PING)
+# ===============================================================================
 engine = create_engine(
-    connection_url,
-    pool_pre_ping=True,      # Valida la conexión antes de cada consulta
-    pool_size=10,            # Hilos persistentes en memoria
-    max_overflow=20,         # Hilos adicionales para picos de carga
-    connect_args={"connect_timeout": 5} # Evita bloqueos indefinidos
+    DATABASE_URL,
+    pool_pre_ping=True,       # Verifica que la conexión esté viva antes de ejecutar SQL
+    pool_recycle=300,         # Recicla conexiones cada 5 minutos para evitar cortes en Neon
+    pool_size=10,             # Tamaño del pool de conexiones para concurrencia B2B
+    max_overflow=20
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_db():
-    """Inyección de dependencia para endpoints de FastAPI."""
+    """Generador de contexto de base de datos para inyección de dependencias."""
     db = SessionLocal()
     try:
         yield db
