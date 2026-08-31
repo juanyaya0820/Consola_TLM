@@ -1,10 +1,13 @@
 # ===============================================================================
 # ARCHIVO: tlm-backend/app/main.py
-# ORQUESTRADOR PRINCIPAL CON AUTOSANACIÓN DE ESQUEMA POSTGRESQL & AUTO-SEEDING
+# ORQUESTRADOR PRINCIPAL: SERVICIO DE INTERFAZ SPA, MIGRACIÓN & AUTO-SEEDING
 # ===============================================================================
+import os
 import logging
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -18,11 +21,11 @@ logger = logging.getLogger("api_orchestrator")
 app = FastAPI(
     title="Consola TLM - Motor Fiscal & BI",
     version="2.1.0",
-    description="API REST B2B para auditoría contable, conciliación bancaria y liquidación F350"
+    description="Plataforma B2B para auditoría contable, conciliación bancaria y liquidación F350"
 )
 
 # -------------------------------------------------------------------------------
-# 1. POLÍTICAS CORS (CROSS-ORIGIN RESOURCE SHARING)
+# 1. POLÍTICAS CORS (ACCESO MULTI-ORIGEN)
 # -------------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
@@ -33,14 +36,47 @@ app.add_middleware(
 )
 
 # -------------------------------------------------------------------------------
-# 2. ENRUTADORES DE API REST
+# 2. VINCULACIÓN DE CONTROLADORES REST
 # -------------------------------------------------------------------------------
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Seguridad & Autenticación"])
 app.include_router(empresas.router, prefix="/api/v1/empresas", tags=["Gestión Multi-Tenant"])
 app.include_router(facturas.router, prefix="/api/v1/facturas", tags=["Motor ETL & Auditoría"])
 
 # -------------------------------------------------------------------------------
-# 3. EVENTO DE ARRANQUE (STARTUP): MIGRACIÓN Y SIEMBRA EN NEON CLOUD
+# 3. ENRUTAMIENTO DE INTERFAZ GRÁFICA (FRONTEND SPA)
+# -------------------------------------------------------------------------------
+@app.get("/", response_class=HTMLResponse, tags=["Interfaz de Usuario"])
+def servir_interfaz_cliente():
+    """
+    Entrega el cliente Single Page Application (SPA) al acceder a la URL principal.
+    Busca la plantilla index.html en las rutas estándar del proyecto.
+    """
+    base_dir = Path(__file__).resolve().parent.parent.parent  # Raíz del repositorio
+    
+    posibles_rutas = [
+        base_dir / "tlm-frontend" / "index.html",
+        base_dir / "index.html",
+        Path(__file__).resolve().parent / "static" / "index.html"
+    ]
+
+    for ruta in posibles_rutas:
+        if ruta.exists():
+            return FileResponse(ruta)
+
+    # Fallback dinámico si el archivo HTML no se encuentra en el contenedor
+    return HTMLResponse(content="""
+        <html>
+            <head><title>Consola TLM - Estado de Servidor</title></head>
+            <body style="font-family:sans-serif; text-align:center; padding:50px; background:#F8F9FA;">
+                <h1 style="color:#271A82;">🛡️ Consola TLM - API Backend Activa</h1>
+                <p style="color:#666;">El motor de base de datos y la API están operativos.</p>
+                <p><a href="/docs" style="color:#F37A20; font-weight:bold;">Ver Documentación Swagger API (/docs)</a></p>
+            </body>
+        </html>
+    """)
+
+# -------------------------------------------------------------------------------
+# 4. EVENTO DE ARRANQUE (STARTUP): MIGRACIÓN Y SIEMBRA EN NEON CLOUD
 # -------------------------------------------------------------------------------
 @app.on_event("startup")
 def sincronizar_esquema_y_sembrar_datos():
@@ -53,29 +89,25 @@ def sincronizar_esquema_y_sembrar_datos():
     try:
         with engine.connect() as conn:
             with conn.begin():
-                # Verificar si la columna hashed_password existe físicamente en usuarios
                 resultado = conn.execute(text("""
                     SELECT column_name 
                     FROM information_schema.columns 
                     WHERE table_name='usuarios' AND column_name='hashed_password';
                 """)).fetchone()
                 
-                # Si la columna no existe, purgamos el esquema desalineado
                 if not resultado:
-                    logger.warn("⚠️ [Migración] Desfase detectado en 'usuarios'. Reconstruyendo esquema público...")
+                    logger.warning("⚠️ [Migración] Desfase detectado en 'usuarios'. Reconstruyendo esquema público...")
                     conn.execute(text("DROP SCHEMA public CASCADE;"))
                     conn.execute(text("CREATE SCHEMA public;"))
                     conn.execute(text("GRANT ALL ON SCHEMA public TO public;"))
                     logger.info("✅ [Migración] Esquema reconstruido correctamente.")
 
-        # Reconstruir las tablas con la estructura limpia de models.py
         Base.metadata.create_all(bind=engine)
         logger.info("✅ [Startup] Modelos ORM sincronizados con la base de datos.")
 
-        # Inyección de Semilla de Datos (Auto-Seeding)
+        # Inyección de Semilla de Datos
         db: Session = SessionLocal()
         try:
-            # 1. Sembrar Administrador Maestro
             admin = db.query(models.Usuario).filter(models.Usuario.email == "admin@tlm.com").first()
             if not admin:
                 from app.api.v1.endpoints.auth import obtener_hash_password
@@ -91,7 +123,6 @@ def sincronizar_esquema_y_sembrar_datos():
                 db.refresh(admin)
                 logger.info("✅ [Seeding] Usuario creado: admin@tlm.com / admin123")
 
-            # 2. Sembrar Empresa Demo
             empresa = db.query(models.Empresa).first()
             if not empresa:
                 empresa = models.Empresa(
@@ -105,7 +136,6 @@ def sincronizar_esquema_y_sembrar_datos():
                 db.refresh(empresa)
                 logger.info("✅ [Seeding] Empresa Demo creada: TLM Consulting S.A.S. (Demo)")
 
-            # 3. Vincular matriz de permisos Multi-Tenant
             if empresa not in admin.empresas_asociadas:
                 admin.empresas_asociadas.append(empresa)
                 db.commit()
@@ -121,7 +151,7 @@ def sincronizar_esquema_y_sembrar_datos():
         logger.error(f"❌ [Startup] Error crítico durante la sincronización: {str(exc_startup)}")
 
 # -------------------------------------------------------------------------------
-# 4. HEALTH CHECK
+# 5. ENDPOINT DE SALUD
 # -------------------------------------------------------------------------------
 @app.get("/health", tags=["Infraestructura"])
 def health_check():
