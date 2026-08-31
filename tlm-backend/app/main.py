@@ -1,6 +1,6 @@
 # ===============================================================================
-# ARCHIVO: tlm-backend/app/main.py
-# ORQUESTRADOR PRINCIPAL: SERVICIO DE INTERFAZ SPA, MIGRACIÓN & AUTO-SEEDING
+# ARCHIVO: app/main.py
+# ORQUESTRADOR PRINCIPAL: PRODUCCIÓN SEGURA (MIGRACIONES NO DESTRUCTIVAS)
 # ===============================================================================
 import os
 import logging
@@ -25,7 +25,7 @@ app = FastAPI(
 )
 
 # -------------------------------------------------------------------------------
-# 1. POLÍTICAS CORS (ACCESO MULTI-ORIGEN)
+# 1. POLÍTICAS CORS
 # -------------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
@@ -36,76 +36,64 @@ app.add_middleware(
 )
 
 # -------------------------------------------------------------------------------
-# 2. VINCULACIÓN DE CONTROLADORES REST
+# 2. RUTAS REST Y FRONTEND
 # -------------------------------------------------------------------------------
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Seguridad & Autenticación"])
 app.include_router(empresas.router, prefix="/api/v1/empresas", tags=["Gestión Multi-Tenant"])
 app.include_router(facturas.router, prefix="/api/v1/facturas", tags=["Motor ETL & Auditoría"])
 
-# -------------------------------------------------------------------------------
-# 3. ENRUTAMIENTO DE INTERFAZ GRÁFICA (FRONTEND SPA)
-# -------------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse, tags=["Interfaz de Usuario"])
 def servir_interfaz_cliente():
-    """
-    Entrega el cliente Single Page Application (SPA) al acceder a la URL principal.
-    Busca la plantilla index.html en las rutas estándar del proyecto.
-    """
-    base_dir = Path(__file__).resolve().parent.parent.parent  # Raíz del repositorio
-    
+    """Entrega la SPA al acceder a la raíz del dominio."""
+    base_dir = Path(__file__).resolve().parent.parent.parent
     posibles_rutas = [
         base_dir / "tlm-frontend" / "index.html",
         base_dir / "index.html",
         Path(__file__).resolve().parent / "static" / "index.html"
     ]
-
     for ruta in posibles_rutas:
         if ruta.exists():
             return FileResponse(ruta)
 
-    # Fallback dinámico si el archivo HTML no se encuentra en el contenedor
-    return HTMLResponse(content="""
-        <html>
-            <head><title>Consola TLM - Estado de Servidor</title></head>
-            <body style="font-family:sans-serif; text-align:center; padding:50px; background:#F8F9FA;">
-                <h1 style="color:#271A82;">🛡️ Consola TLM - API Backend Activa</h1>
-                <p style="color:#666;">El motor de base de datos y la API están operativos.</p>
-                <p><a href="/docs" style="color:#F37A20; font-weight:bold;">Ver Documentación Swagger API (/docs)</a></p>
-            </body>
-        </html>
-    """)
+    return HTMLResponse(content="<h2>Consola TLM API Online</h2>")
 
 # -------------------------------------------------------------------------------
-# 4. EVENTO DE ARRANQUE (STARTUP): MIGRACIÓN Y SIEMBRA EN NEON CLOUD
+# 3. MIGRACIÓN SEGURA NO DESTRUCTIVA Y AUTO-SEEDING (STARTUP)
 # -------------------------------------------------------------------------------
 @app.on_event("startup")
-def sincronizar_esquema_y_sembrar_datos():
+def migracion_segura_y_seeding():
     """
-    Inspecciona la estructura física en PostgreSQL. Si detecta columnas ausentes,
-    corrige el esquema automáticamente en Render e inyecta la semilla inicial.
+    Ejecuta DDL no destructivo (ALTER TABLE ADD COLUMN IF NOT EXISTS).
+    Garantiza que NUNCA se borren datos existentes en Producción.
     """
-    logger.info("[Startup] Inspeccionando estructura física en PostgreSQL Neon...")
+    logger.info("[Startup] Verificando integridad de esquema en PostgreSQL...")
     
     try:
         with engine.connect() as conn:
             with conn.begin():
-                resultado = conn.execute(text("""
-                    SELECT column_name 
-                    FROM information_schema.columns 
-                    WHERE table_name='usuarios' AND column_name='hashed_password';
-                """)).fetchone()
+                # A. Agregar columnas faltantes en 'usuarios' sin borrar datos
+                conn.execute(text("""
+                    ALTER TABLE usuarios 
+                    ADD COLUMN IF NOT EXISTS hashed_password VARCHAR,
+                    ADD COLUMN IF NOT EXISTS rol VARCHAR DEFAULT 'Analista',
+                    ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT FALSE;
+                """))
+
+                # B. Crear tabla asociativa de permisos si no existe
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS usuario_empresa (
+                        id_usuario INTEGER REFERENCES usuarios(id_usuario) ON DELETE CASCADE,
+                        id_empresa INTEGER REFERENCES empresas(id_empresa) ON DELETE CASCADE,
+                        PRIMARY KEY (id_usuario, id_empresa)
+                    );
+                """))
                 
-                if not resultado:
-                    logger.warning("⚠️ [Migración] Desfase detectado en 'usuarios'. Reconstruyendo esquema público...")
-                    conn.execute(text("DROP SCHEMA public CASCADE;"))
-                    conn.execute(text("CREATE SCHEMA public;"))
-                    conn.execute(text("GRANT ALL ON SCHEMA public TO public;"))
-                    logger.info("✅ [Migración] Esquema reconstruido correctamente.")
+                logger.info("✅ [Migración Segura] Estructura de tablas actualizada sin pérdida de datos.")
 
+        # Asegurar la creación de tablas nuevas (SoportePDF, etc.)
         Base.metadata.create_all(bind=engine)
-        logger.info("✅ [Startup] Modelos ORM sincronizados con la base de datos.")
 
-        # Inyección de Semilla de Datos
+        # C. Auto-Seeding Preventivo (Solo crea si la tabla está vacía)
         db: Session = SessionLocal()
         try:
             admin = db.query(models.Usuario).filter(models.Usuario.email == "admin@tlm.com").first()
@@ -121,7 +109,7 @@ def sincronizar_esquema_y_sembrar_datos():
                 db.add(admin)
                 db.commit()
                 db.refresh(admin)
-                logger.info("✅ [Seeding] Usuario creado: admin@tlm.com / admin123")
+                logger.info("✅ [Seeding] Usuario administrador inicial verificado.")
 
             empresa = db.query(models.Empresa).first()
             if not empresa:
@@ -134,29 +122,20 @@ def sincronizar_esquema_y_sembrar_datos():
                 db.add(empresa)
                 db.commit()
                 db.refresh(empresa)
-                logger.info("✅ [Seeding] Empresa Demo creada: TLM Consulting S.A.S. (Demo)")
 
             if empresa not in admin.empresas_asociadas:
                 admin.empresas_asociadas.append(empresa)
                 db.commit()
-                logger.info("✅ [Seeding] Permisos Multi-Tenant vinculados con éxito.")
 
         except Exception as exc_db:
             db.rollback()
-            logger.error(f"❌ [Seeding] Error en la transacción de datos: {str(exc_db)}")
+            logger.error(f"❌ [Seeding] Advertencia en siembra: {str(exc_db)}")
         finally:
             db.close()
 
     except Exception as exc_startup:
-        logger.error(f"❌ [Startup] Error crítico durante la sincronización: {str(exc_startup)}")
+        logger.error(f"❌ [Startup] Error en verificación de esquema: {str(exc_startup)}")
 
-# -------------------------------------------------------------------------------
-# 5. ENDPOINT DE SALUD
-# -------------------------------------------------------------------------------
 @app.get("/health", tags=["Infraestructura"])
 def health_check():
-    return {
-        "status": "online",
-        "entorno": "desarrollo",
-        "motor": "FastAPI + SQLAlchemy + PostgreSQL Neon"
-    }
+    return {"status": "online", "entorno": "produccion_safe"}
