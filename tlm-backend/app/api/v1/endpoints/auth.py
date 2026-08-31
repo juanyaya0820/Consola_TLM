@@ -1,14 +1,14 @@
 # ===============================================================================
 # ARCHIVO: app/api/v1/endpoints/auth.py
-# CONTROLADOR REST: AUTENTICACIÓN, REGISTRO Y GOBERNANZA DE USUARIOS
+# CONTROLADOR REST: SEGURIDAD, REGISTRO Y GOBERNANZA DE USUARIOS
 # ===============================================================================
 import logging
+import hashlib
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
-import hashlib
 
 from app.db.session import get_db
 from app.db import models
@@ -16,20 +16,14 @@ from app.db import models
 logger = logging.getLogger("api_orchestrator")
 router = APIRouter()
 
-# -------------------------------------------------------------------------------
-# FUNCIONES AUXILIARES DE SEGURIDAD (HASHING DE CONTRASEÑAS)
-# -------------------------------------------------------------------------------
+# --- FUNCIONES DE HASHING ---
 def obtener_hash_password(password: str) -> str:
-    """Genera un hash SHA-256 seguro para almacenar la contraseña."""
     return hashlib.sha256(password.encode('utf-8')).hexdigest()
 
 def verificar_password(password_plana: str, password_hashed: str) -> bool:
-    """Valida si la contraseña ingresada coincide con el hash almacenado."""
     return obtener_hash_password(password_plana) == password_hashed
 
-# -------------------------------------------------------------------------------
-# ESQUEMAS PYDANTIC (DTOs)
-# -------------------------------------------------------------------------------
+# --- ESQUEMAS PYDANTIC ---
 class LoginSchema(BaseModel):
     email: EmailStr
     password: str
@@ -49,13 +43,10 @@ class UsuarioResponseSchema(BaseModel):
     class Config:
         from_attributes = True
 
-# -------------------------------------------------------------------------------
-# ENDPOINTS REST
-# -------------------------------------------------------------------------------
+# --- ENDPOINTS ---
 
-@router.post("/login", summary="Iniciar Sesión en la Consola")
+@router.post("/login", summary="Iniciar Sesión")
 def login(payload: LoginSchema, db: Session = Depends(get_db)):
-    """Valida las credenciales del usuario y genera la respuesta de autenticación."""
     usuario = db.query(models.Usuario).filter(models.Usuario.email == payload.email).first()
     
     if not usuario or not verificar_password(payload.password, usuario.hashed_password):
@@ -67,7 +58,7 @@ def login(payload: LoginSchema, db: Session = Depends(get_db)):
     if not usuario.activo:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Tu cuenta está pendiente de aprobación por parte del Administrador."
+            detail="Tu cuenta está pendiente de aprobación por el Administrador."
         )
 
     return {
@@ -79,15 +70,11 @@ def login(payload: LoginSchema, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/register", status_code=status.HTTP_201_CREATED, summary="Solicitar registro de usuario")
+@router.post("/register", status_code=status.HTTP_201_CREATED, summary="Solicitar registro")
 def registrar_usuario(payload: RegistroSchema, db: Session = Depends(get_db)):
-    """Registra una nueva cuenta de analista en estado pendiente (`activo=False`)."""
     usuario_existente = db.query(models.Usuario).filter(models.Usuario.email == payload.email).first()
     if usuario_existente:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Ya existe un usuario registrado con este correo electrónico."
-        )
+        raise HTTPException(status_code=400, detail="El correo ya se encuentra registrado.")
 
     nuevo_usuario = models.Usuario(
         nombre_completo=payload.nombre_completo,
@@ -101,27 +88,24 @@ def registrar_usuario(payload: RegistroSchema, db: Session = Depends(get_db)):
         db.add(nuevo_usuario)
         db.commit()
         db.refresh(nuevo_usuario)
-        return {"mensaje": "Solicitud de registro enviada con éxito.", "id_usuario": nuevo_usuario.id_usuario}
+        return {"mensaje": "Registro solicitado correctamente.", "id_usuario": nuevo_usuario.id_usuario}
     except SQLAlchemyError as exc:
         db.rollback()
-        logger.error(f"Error al registrar usuario: {str(exc)}")
-        raise HTTPException(status_code=500, detail="Error transaccional al crear la cuenta.")
+        raise HTTPException(status_code=500, detail="Error al crear el usuario.")
 
 
-@router.get("/usuarios", response_model=List[UsuarioResponseSchema], summary="Listar todos los usuarios para gobernanza")
+@router.get("/usuarios", response_model=List[UsuarioResponseSchema], summary="Listar usuarios")
 def listar_usuarios(db: Session = Depends(get_db)):
-    """Retorna la lista completa de usuarios para el panel de administración."""
+    """Retorna la lista de usuarios para el panel de administración."""
     try:
-        usuarios = db.query(models.Usuario).all()
-        return usuarios
+        return db.query(models.Usuario).all()
     except SQLAlchemyError as exc:
         logger.error(f"Error al consultar usuarios: {str(exc)}")
-        raise HTTPException(status_code=500, detail="Error al consultar la lista de usuarios.")
+        raise HTTPException(status_code=500, detail="Error de base de datos al listar usuarios.")
 
 
-@router.patch("/usuarios/{id_usuario}/aprobar", summary="Aprobar acceso a un usuario")
+@router.patch("/usuarios/{id_usuario}/aprobar", summary="Aprobar acceso de usuario")
 def aprobar_usuario(id_usuario: int, db: Session = Depends(get_db)):
-    """Activa la cuenta de un usuario para permitir su acceso."""
     usuario = db.query(models.Usuario).filter(models.Usuario.id_usuario == id_usuario).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuario no encontrado.")
@@ -129,15 +113,14 @@ def aprobar_usuario(id_usuario: int, db: Session = Depends(get_db)):
     try:
         usuario.activo = True
         db.commit()
-        return {"mensaje": f"Usuario {usuario.email} aprobado exitosamente."}
+        return {"mensaje": f"Usuario {usuario.email} aprobado."}
     except SQLAlchemyError as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Error al actualizar el estado del usuario.")
+        raise HTTPException(status_code=500, detail="Error al aprobar usuario.")
 
 
 @router.delete("/usuarios/{id_usuario}", summary="Eliminar usuario")
 def eliminar_usuario(id_usuario: int, db: Session = Depends(get_db)):
-    """Elimina la cuenta de un usuario y sus relaciones de la base de datos."""
     usuario = db.query(models.Usuario).filter(models.Usuario.id_usuario == id_usuario).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuario no encontrado.")
@@ -148,4 +131,4 @@ def eliminar_usuario(id_usuario: int, db: Session = Depends(get_db)):
         return {"mensaje": "Usuario eliminado correctamente."}
     except SQLAlchemyError as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Error al eliminar el usuario.")
+        raise HTTPException(status_code=500, detail="Error al eliminar usuario.")
