@@ -1,6 +1,5 @@
 # ===============================================================================
-# ARCHIVO: app/db/models.py
-# MODELADO DE DATOS ORM COMPLETO: GOBERNANZA, ETL FISCAL Y CEREBRO CONTABLE
+# ARCHIVO: app/db/models.py (EXTRACTO CORREGIDO Y ALINEADO CON BD)
 # ===============================================================================
 import datetime
 from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text, Table
@@ -10,7 +9,6 @@ from app.db.session import Base
 # -------------------------------------------------------------------------------
 # 1. TABLA ASOCIATIVA MULTI-TENANT (JUNCTION TABLE)
 # -------------------------------------------------------------------------------
-# Asocia usuarios con empresas autorizadas para aislamiento lógico en PostgreSQL
 usuario_empresa = Table(
     'usuario_empresa',
     Base.metadata,
@@ -19,7 +17,7 @@ usuario_empresa = Table(
 )
 
 # -------------------------------------------------------------------------------
-# 2. ENTIDAD: USUARIOS (Analistas, Auditores y Administradores)
+# 2. ENTIDAD: USUARIOS
 # -------------------------------------------------------------------------------
 class Usuario(Base):
     __tablename__ = "usuarios"
@@ -28,20 +26,19 @@ class Usuario(Base):
     nombre_completo = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
-    rol = Column(String, default="Analista")  # "Administrador" o "Analista"
+    rol = Column(String, default="Analista")
     activo = Column(Boolean, default=False)
-    fecha_creacion = Column(DateTime, default=datetime.datetime.utcnow)
 
-    # Relación Many-to-Many con Empresa mediante la tabla asociativa
+    # Relación Many-to-Many mediante la tabla asociativa
     empresas_asociadas = relationship(
         "Empresa",
         secondary=usuario_empresa,
         back_populates="usuarios_autorizados",
-        lazy="joined"  # Carga los permisos inmediatamente en el login
+        lazy="joined"
     )
 
 # -------------------------------------------------------------------------------
-# 3. ENTIDAD: EMPRESAS (Clientes / Entidades Auditables)
+# 3. ENTIDAD: EMPRESAS
 # -------------------------------------------------------------------------------
 class Empresa(Base):
     __tablename__ = "empresas"
@@ -52,9 +49,7 @@ class Empresa(Base):
     software_erp = Column(String, default="SIIGO_NUBE")
     software_destino = Column(String, default="SIIGO_NUBE")
     logo_url = Column(String, nullable=True)
-    fecha_creacion = Column(DateTime, default=datetime.datetime.utcnow)
 
-    # Relaciones inversas y borrado en cascada
     usuarios_autorizados = relationship(
         "Usuario",
         secondary=usuario_empresa,
@@ -65,7 +60,7 @@ class Empresa(Base):
     saldos_balance = relationship("BalancePruebaModel", back_populates="empresa", cascade="all, delete-orphan")
 
 # -------------------------------------------------------------------------------
-# 4. ENTIDAD: FACTURAS (Motor ETL, Auditoría Fiscal F350 y Soportes XML/PDF)
+# 4. ENTIDAD: FACTURAS
 # -------------------------------------------------------------------------------
 class Factura(Base):
     __tablename__ = "facturas"
@@ -74,7 +69,7 @@ class Factura(Base):
     id_empresa = Column(Integer, ForeignKey("empresas.id_empresa", ondelete="CASCADE"), nullable=False, index=True)
     
     factura_num = Column(String, index=True, nullable=False)
-    fecha = Column(String, index=True, nullable=True)  # YYYY-MM-DD
+    fecha = Column(String, index=True, nullable=True)
     proveedor = Column(String, index=True, nullable=True)
     nit_tercero = Column(String, index=True, nullable=True)
     descripcion_item = Column(Text, nullable=True)
@@ -86,16 +81,16 @@ class Factura(Base):
     retencion_porc = Column(Float, default=0.0)
     retencion_valor = Column(Float, default=0.0)
     
-    forma_pago = Column(String, default="Contado")  # "Contado" o "Crédito"
+    forma_pago = Column(String, default="Contado")
     cuenta_gasto = Column(String, default="51953001", index=True)
-    tipo_comprobante = Column(String, default="COMPRAS")  # "COMPRAS" o "VENTAS"
+    tipo_comprobante = Column(String, default="COMPRAS")
     pdf_b64 = Column(Text, nullable=True)
     fecha_cargue = Column(DateTime, default=datetime.datetime.utcnow)
 
     empresa = relationship("Empresa", back_populates="facturas")
 
 # -------------------------------------------------------------------------------
-# 5. ENTIDAD: CEREBRO CONTABLE - CATÁLOGO DE CUENTAS (PUC)
+# 5. ENTIDAD: PUC
 # -------------------------------------------------------------------------------
 class PUCModel(Base):
     __tablename__ = "puc_cuentas"
@@ -110,7 +105,7 @@ class PUCModel(Base):
     empresa = relationship("Empresa", back_populates="cuentas_puc")
 
 # -------------------------------------------------------------------------------
-# 6. ENTIDAD: CEREBRO CONTABLE - BALANCE DE PRUEBA HISTÓRICO
+# 6. ENTIDAD: BALANCE DE PRUEBA
 # -------------------------------------------------------------------------------
 class BalancePruebaModel(Base):
     __tablename__ = "balance_prueba"
