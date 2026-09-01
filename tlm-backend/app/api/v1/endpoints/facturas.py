@@ -8,9 +8,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from pydantic import BaseModel
 from typing import List, Optional, Union
+from pathlib import Path
 import xml.etree.ElementTree as ET
 import pandas as pd
 import numpy as np
+import openpyxl
 import zipfile
 import base64
 import io
@@ -1395,8 +1397,8 @@ def exportar_interfaz_siigo_nube(
     db: Session = Depends(get_db)
 ):
     """
-    Exporta la plantilla de importación oficial (.xlsx) de 31 columnas
-    para el módulo de Facturas de Venta / Ingresos en Siigo Nube.
+    Genera el archivo de cargue masivo Excel (.xlsx) respetando la plantilla binaria
+    oficial de Siigo Nube (31 columnas con formato nativo de fecha DD/MM/YYYY y cabeceras exactas).
     """
     query = db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa)
     query = aplicar_filtros_tabla(query, fecha_desde, fecha_hasta, tipo_comprobante)
@@ -1405,19 +1407,46 @@ def exportar_interfaz_siigo_nube(
     if not facturas: 
         raise HTTPException(status_code=404, detail="No hay facturas registradas para exportar.")
 
-    siigo_nube_cols = [
-        'Tipo de comprobante', 'Consecutivo', 'Identificación tercero', 'Sucursal',
-        'Código centro/subcentro de costos', 'Fecha de elaboración  ', 'Sigla Moneda',
-        'Tasa de cambio', 'Nombre contacto', 'Email Contacto', 'Orden de compra',
-        'Orden de entrega', 'Fecha orden de entrega', 'Código producto',
-        'Descripción producto', 'Identificación vendedor', 'Código de Bodega',
-        'Cantidad producto', 'Valor unitario', 'Valor Descuento', 'Base AIU',
-        'Identificación ingreso para terceros', 'Código impuesto cargo',
-        'Código impuesto cargo dos', 'Código impuesto retención', 'Código ReteICA',
-        'Código ReteIVA', 'Código forma de pago', 'Valor Forma de Pago',
-        'Fecha Vencimiento', 'Observaciones'
+    # 1. Intentar cargar la plantilla oficial binaria de Siigo Nube
+    base_dir = Path(__file__).resolve().parent.parent.parent.parent
+    posibles_rutas_plantilla = [
+        base_dir / "app" / "static" / "modelo_siigo_nube.xlsx",
+        base_dir / "static" / "modelo_siigo_nube.xlsx",
+        Path(__file__).resolve().parent.parent.parent / "static" / "modelo_siigo_nube.xlsx"
     ]
 
+    wb = None
+    for ruta_p in posibles_rutas_plantilla:
+        if ruta_p.exists():
+            try:
+                wb = openpyxl.load_workbook(ruta_p)
+                break
+            except Exception as e:
+                logger.error(f"Error cargando plantilla física de Siigo: {e}")
+
+    if wb is None:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Hoja1"
+        siigo_nube_cols = [
+            'Tipo de comprobante', 'Consecutivo', 'Identificación tercero', 'Sucursal',
+            'Código centro/subcentro de costos', 'Fecha de elaboración  ', 'Sigla Moneda',
+            'Tasa de cambio', 'Nombre contacto', 'Email Contacto', 'Orden de compra',
+            'Orden de entrega', 'Fecha orden de entrega', 'Código producto',
+            'Descripción producto', 'Identificación vendedor', 'Código de Bodega',
+            'Cantidad producto', 'Valor unitario', 'Valor Descuento', 'Base AIU',
+            'Identificación ingreso para terceros', 'Código impuesto cargo',
+            'Código impuesto cargo dos', 'Código impuesto retención', 'Código ReteICA',
+            'Código ReteIVA', 'Código forma de pago', 'Valor Forma de Pago',
+            'Fecha Vencimiento', 'Observaciones'
+        ]
+        ws.append(siigo_nube_cols)
+    else:
+        ws = wb['Hoja1'] if 'Hoja1' in wb.sheetnames else wb.active
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row)
+
+    # 2. Asignación secuencial de consecutivos por cada número de factura unívoco
     mapa_consecutivos = {}
     consecutivo_actual = consecutivo_inicial
     for f in facturas:
@@ -1426,7 +1455,20 @@ def exportar_interfaz_siigo_nube(
             mapa_consecutivos[num_clean] = consecutivo_actual
             consecutivo_actual += 1
 
-    filas_siigo = []
+    def formatear_fecha_siigo(fecha_raw: str) -> str:
+        if not fecha_raw:
+            return ""
+        try:
+            fecha_clean = str(fecha_raw).strip()
+            if "-" in fecha_clean:
+                partes = fecha_clean.split("T")[0].split("-")
+                if len(partes) == 3 and len(partes[0]) == 4:
+                    return f"{partes[2]}/{partes[1]}/{partes[0]}"
+            return fecha_clean
+        except Exception:
+            return str(fecha_raw)
+
+    # 3. Poblar filas respetando tipos de datos y formato Siigo
     for f in facturas:
         num_clean = str(f.factura_num).strip().upper()
         consecutivo_asignado = mapa_consecutivos[num_clean]
@@ -1435,49 +1477,50 @@ def exportar_interfaz_siigo_nube(
         iva = float(f.iva or 0.0)
         total_pago = subtotal + iva
 
-        cod_impuesto_cargo = 1 if iva > 0 else 0
-        cod_impuesto_rete = 1 if (f.retencion_porc and f.retencion_porc > 0) else 0
+        cod_impuesto_cargo = "1" if iva > 0 else ""
+        cod_impuesto_rete = "1" if (f.retencion_porc and f.retencion_porc > 0) else "0"
         cod_forma_pago = 2 if str(f.forma_pago).lower() == "crédito" else 1
 
-        filas_siigo.append({
-            'Tipo de comprobante': tipo_comprobante_siigo.strip(),
-            'Consecutivo': consecutivo_asignado,
-            'Identificación tercero': str(f.nit_tercero or "").strip(),
-            'Sucursal': 0,
-            'Código centro/subcentro de costos': '',
-            'Fecha de elaboración  ': str(f.fecha or "").strip(),
-            'Sigla Moneda': 'COP',
-            'Tasa de cambio': 1,
-            'Nombre contacto': str(f.proveedor or "").strip(),
-            'Email Contacto': getattr(f, 'correo', '') or '',
-            'Orden de compra': '',
-            'Orden de entrega': '',
-            'Fecha orden de entrega': '',
-            'Código producto': str(f.cuenta_gasto or "1").strip(),
-            'Descripción producto': str(f.descripcion_item or "Servicio / Producto").strip()[:200],
-            'Identificación vendedor': '',
-            'Código de Bodega': 1,
-            'Cantidad producto': float(f.cantidad or 1.0),
-            'Valor unitario': float(f.valor_unitario or subtotal),
-            'Valor Descuento': 0,
-            'Base AIU': 0,
-            'Identificación ingreso para terceros': '',
-            'Código impuesto cargo': cod_impuesto_cargo,
-            'Código impuesto cargo dos': '',
-            'Código impuesto retención': cod_impuesto_rete,
-            'Código ReteICA': 0,
-            'Código ReteIVA': 0,
-            'Código forma de pago': cod_forma_pago,
-            'Valor Forma de Pago': total_pago,
-            'Fecha Vencimiento': str(getattr(f, 'fecha_vencimiento', f.fecha) or "").strip(),
-            'Observaciones': f"Factura {num_clean} auditada en Consola TLM"
-        })
+        fecha_elab = formatear_fecha_siigo(str(f.fecha or ""))
+        fecha_venc = formatear_fecha_siigo(str(getattr(f, 'fecha_vencimiento', f.fecha) or ""))
 
-    df_siigo = pd.DataFrame(filas_siigo, columns=siigo_nube_cols)
+        fila = [
+            tipo_comprobante_siigo.strip(),                            # 1. Tipo de comprobante
+            consecutivo_asignado,                                      # 2. Consecutivo
+            str(f.nit_tercero or "").strip(),                          # 3. Identificación tercero
+            0,                                                         # 4. Sucursal
+            "",                                                        # 5. Código centro/subcentro de costos
+            fecha_elab,                                                # 6. Fecha de elaboración  
+            "COP",                                                     # 7. Sigla Moneda
+            1,                                                         # 8. Tasa de cambio
+            str(f.proveedor or "").strip(),                            # 9. Nombre contacto
+            getattr(f, 'correo', '') or '',                            # 10. Email Contacto
+            "",                                                        # 11. Orden de compra
+            "",                                                        # 12. Orden de entrega
+            "",                                                        # 13. Fecha orden de entrega
+            str(f.cuenta_gasto or "1").strip(),                        # 14. Código producto
+            str(f.descripcion_item or "Servicio / Producto").strip()[:200], # 15. Descripción producto
+            "",                                                        # 16. Identificación vendedor
+            1,                                                         # 17. Código de Bodega
+            float(f.cantidad or 1.0),                                  # 18. Cantidad producto
+            float(f.valor_unitario or subtotal),                       # 19. Valor unitario
+            0.0,                                                       # 20. Valor Descuento
+            0.0,                                                       # 21. Base AIU
+            "",                                                        # 22. Identificación ingreso para terceros
+            cod_impuesto_cargo,                                        # 23. Código impuesto cargo
+            "",                                                        # 24. Código impuesto cargo dos
+            cod_impuesto_rete,                                         # 25. Código impuesto retención
+            "0",                                                       # 26. Código ReteICA
+            "0",                                                       # 27. Código ReteIVA
+            cod_forma_pago,                                            # 28. Código forma de pago
+            total_pago,                                                # 29. Valor Forma de Pago
+            fecha_venc,                                                # 30. Fecha Vencimiento
+            f"Factura {num_clean} auditada en Consola TLM"             # 31. Observaciones
+        ]
+        ws.append(fila)
 
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_siigo.to_excel(writer, index=False, sheet_name='Hoja1')
+    wb.save(output)
     output.seek(0)
 
     nombre_archivo = f"Siigo_Nube_Cargue_{tipo_comprobante_siigo}_{consecutivo_inicial}.xlsx"
