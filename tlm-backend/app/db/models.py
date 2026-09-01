@@ -1,146 +1,184 @@
 # ===============================================================================
-# ARCHIVO: tlm-backend/app/db/models.py
-# MODELO DE DATOS UNIFICADO CON METADATOS TRIBUTARIOS Y CONTACTO DE TERCEROS
+# ARCHIVO: tlm-backend/app/main.py
+# PROYECTO: CONSOLA TLM - MOTOR FISCAL, ETL & BUSINESS INTELLIGENCE
+# ROL: ORQUESTRADOR PRINCIPAL CON MIGRACIONES DDL NO DESTRUCTIVAS Y AUTO-SEEDING
 # ===============================================================================
-import datetime
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text, Table
-from sqlalchemy.orm import relationship
-from app.db.session import Base
+import logging
+from pathlib import Path
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-# -------------------------------------------------------------------------------
-# 1. TABLA ASOCIATIVA MULTI-TENANT (JUNCTION TABLE)
-# -------------------------------------------------------------------------------
-usuario_empresa = Table(
-    'usuario_empresa',
-    Base.metadata,
-    Column('id_usuario', Integer, ForeignKey('usuarios.id_usuario', ondelete="CASCADE"), primary_key=True),
-    Column('id_empresa', Integer, ForeignKey('empresas.id_empresa', ondelete="CASCADE"), primary_key=True)
+from app.db.session import engine, Base, SessionLocal
+from app.db import models
+from app.api.v1.endpoints import facturas, empresas, auth
+
+# Configuración de logs ejecutivos de infraestructura
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("api_orchestrator")
+
+app = FastAPI(
+    title="Consola TLM - Motor Fiscal & BI",
+    version="2.1.0",
+    description="Plataforma B2B para auditoría contable, conciliación bancaria y liquidación F350"
 )
 
 # -------------------------------------------------------------------------------
-# 2. ENTIDAD: USUARIO
+# 1. POLÍTICAS DE SEGURIDAD Y ORIGEN CRUZADO (CORS)
 # -------------------------------------------------------------------------------
-class Usuario(Base):
-    __tablename__ = "usuarios"
-
-    id_usuario = Column(Integer, primary_key=True, index=True)
-    nombre_completo = Column(String, nullable=False)
-    email = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
-    rol = Column(String, default="Analista")
-    activo = Column(Boolean, default=False)
-
-    empresas_asociadas = relationship(
-        "Empresa",
-        secondary=usuario_empresa,
-        back_populates="usuarios_autorizados",
-        lazy="joined"
-    )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -------------------------------------------------------------------------------
-# 3. ENTIDAD: EMPRESA
+# 2. ENRUTADORES REST (API ENDPOINTS)
 # -------------------------------------------------------------------------------
-class Empresa(Base):
-    __tablename__ = "empresas"
-
-    id_empresa = Column(Integer, primary_key=True, index=True)
-    nombre_comercial = Column(String, nullable=False)
-    nit = Column(String, unique=True, index=True, nullable=False)
-    software_erp = Column(String, default="SIIGO_NUBE")
-    software_destino = Column(String, default="SIIGO_NUBE")
-    logo_url = Column(String, nullable=True)
-
-    usuarios_autorizados = relationship(
-        "Usuario",
-        secondary=usuario_empresa,
-        back_populates="empresas_asociadas"
-    )
-    facturas = relationship("Factura", back_populates="empresa", cascade="all, delete-orphan")
-    soportes_pdf = relationship("SoportePDF", back_populates="empresa", cascade="all, delete-orphan")
-    cuentas_puc = relationship("CuentaPUC", back_populates="empresa", cascade="all, delete-orphan")
-    saldos_balance = relationship("BalanceTercero", back_populates="empresa", cascade="all, delete-orphan")
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["Seguridad & Autenticación"])
+app.include_router(empresas.router, prefix="/api/v1/empresas", tags=["Gestión Multi-Tenant"])
+app.include_router(facturas.router, prefix="/api/v1/facturas", tags=["Motor ETL & Auditoría"])
 
 # -------------------------------------------------------------------------------
-# 4. ENTIDAD: FACTURA (ETL, AUDITORÍA UBL 2.1 & METADATOS TERCERO)
+# 3. ENRUTAMIENTO DE INTERFAZ GRÁFICA (FRONTEND SPA)
 # -------------------------------------------------------------------------------
-class Factura(Base):
-    __tablename__ = "facturas"
+@app.get("/", response_class=HTMLResponse, tags=["Interfaz de Usuario"])
+def servir_interfaz_cliente():
+    """
+    Servicio dinámico del cliente Single Page Application (SPA).
+    """
+    base_dir = Path(__file__).resolve().parent.parent.parent
+    posibles_rutas = [
+        base_dir / "tlm-frontend" / "index.html",
+        base_dir / "index.html",
+        Path(__file__).resolve().parent / "static" / "index.html"
+    ]
+    for ruta in posibles_rutas:
+        if ruta.exists():
+            return FileResponse(ruta)
 
-    id_factura = Column(Integer, primary_key=True, index=True)
-    id_empresa = Column(Integer, ForeignKey("empresas.id_empresa", ondelete="CASCADE"), nullable=False, index=True)
-    
-    factura_num = Column(String, index=True, nullable=False)
-    fecha = Column(String, index=True, nullable=True)
-    fecha_vencimiento = Column(String, nullable=True)
-    proveedor = Column(String, index=True, nullable=True)
-    nit_tercero = Column(String, index=True, nullable=True)
-    
-    # Atributos extendidos del emisor / tercero extraídos del XML UBL 2.1
-    telefono = Column(String, nullable=True)
-    direccion = Column(Text, nullable=True)
-    correo = Column(String, nullable=True)
-    responsabilidad_fiscal = Column(String, nullable=True)
-
-    descripcion_item = Column(Text, nullable=True)
-    cantidad = Column(Float, default=1.0)
-    valor_unitario = Column(Float, default=0.0)
-    subtotal = Column(Float, default=0.0)
-    iva = Column(Float, default=0.0)
-    retencion_porc = Column(Float, default=0.0)
-    retencion_valor = Column(Float, default=0.0)
-    casilla_350 = Column(Integer, nullable=True)
-    
-    forma_pago = Column(String, default="Contado")
-    cuenta_gasto = Column(String, default="51953001", index=True)
-    tipo_comprobante = Column(String, default="COMPRAS")
-    cufe_hash = Column(String, index=True, nullable=True)
-    estado_revision = Column(String, default="PENDIENTE")
-    pdf_b64 = Column(Text, nullable=True)
-    fecha_cargue = Column(DateTime, default=datetime.datetime.utcnow)
-
-    empresa = relationship("Empresa", back_populates="facturas")
+    return HTMLResponse(content="<h2 style='font-family:sans-serif; text-align:center;'>Consola TLM - API Online</h2>")
 
 # -------------------------------------------------------------------------------
-# 5. ENTIDAD: SOPORTE PDF
+# 4. EVENTO STARTUP: MIGRACIÓN SEGURA NO DESTRUCTIVA Y AUTO-SEEDING
 # -------------------------------------------------------------------------------
-class SoportePDF(Base):
-    __tablename__ = "soportes_pdf"
+@app.on_event("startup")
+def migracion_segura_y_seeding():
+    """
+    Ejecuta alteraciones DDL no destructivas (ALTER TABLE IF NOT EXISTS),
+    garantizando que columnas financieras (retencion_valor, retencion_porc)
+    y metadatos de terceros existan físicamente en PostgreSQL sin perder datos.
+    """
+    logger.info("[Startup] Verificando integridad de esquema e infraestructura en PostgreSQL Neon...")
 
-    id_soporte = Column(Integer, primary_key=True, index=True)
-    id_empresa = Column(Integer, ForeignKey("empresas.id_empresa", ondelete="CASCADE"), nullable=False, index=True)
-    factura_num = Column(String, index=True, nullable=False)
-    pdf_b64 = Column(Text, nullable=False)
+    try:
+        with engine.connect() as conn:
+            with conn.begin():
+                # A. Extensión de columnas en la tabla 'usuarios'
+                conn.execute(text("""
+                    ALTER TABLE usuarios 
+                    ADD COLUMN IF NOT EXISTS hashed_password VARCHAR,
+                    ADD COLUMN IF NOT EXISTS rol VARCHAR DEFAULT 'Analista',
+                    ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT FALSE;
+                """))
 
-    empresa = relationship("Empresa", back_populates="soportes_pdf")
+                # B. Resolución de columna heredada 'password_hash' (Remover NOT NULL)
+                conn.execute(text("""
+                    DO $$ 
+                    BEGIN 
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns 
+                            WHERE table_name='usuarios' AND column_name='password_hash'
+                        ) THEN
+                            ALTER TABLE usuarios ALTER COLUMN password_hash DROP NOT NULL;
+                        END IF;
+                    END $$;
+                """))
+
+                # C. Extensión completa de columnas financieras y de contacto en 'facturas'
+                conn.execute(text("""
+                    ALTER TABLE facturas 
+                    ADD COLUMN IF NOT EXISTS telefono VARCHAR,
+                    ADD COLUMN IF NOT EXISTS direccion TEXT,
+                    ADD COLUMN IF NOT EXISTS correo VARCHAR,
+                    ADD COLUMN IF NOT EXISTS responsabilidad_fiscal VARCHAR,
+                    ADD COLUMN IF NOT EXISTS fecha_vencimiento VARCHAR,
+                    ADD COLUMN IF NOT EXISTS retencion_porc DOUBLE PRECISION DEFAULT 0.0,
+                    ADD COLUMN IF NOT EXISTS retencion_valor DOUBLE PRECISION DEFAULT 0.0,
+                    ADD COLUMN IF NOT EXISTS casilla_350 INTEGER,
+                    ADD COLUMN IF NOT EXISTS cufe_hash VARCHAR,
+                    ADD COLUMN IF NOT EXISTS estado_revision VARCHAR DEFAULT 'PENDIENTE',
+                    ADD COLUMN IF NOT EXISTS pdf_b64 TEXT;
+                """))
+
+                # D. Creación condicional de la matriz asociativa Multi-Tenant
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS usuario_empresa (
+                        id_usuario INTEGER REFERENCES usuarios(id_usuario) ON DELETE CASCADE,
+                        id_empresa INTEGER REFERENCES empresas(id_empresa) ON DELETE CASCADE,
+                        PRIMARY KEY (id_usuario, id_empresa)
+                    );
+                """))
+
+                logger.info("✅ [Migración Segura] Estructura DDL y columnas de retención sincronizadas.")
+
+        # Creación de tablas ORM faltantes
+        Base.metadata.create_all(bind=engine)
+
+        # E. Siembra de Datos Maestros (Auto-Seeding Idempotente)
+        db: Session = SessionLocal()
+        try:
+            admin = db.query(models.Usuario).filter(models.Usuario.email == "admin@tlm.com").first()
+            if not admin:
+                from app.api.v1.endpoints.auth import obtener_hash_password
+                admin = models.Usuario(
+                    nombre_completo="Administrador Maestro TLM",
+                    email="admin@tlm.com",
+                    hashed_password=obtener_hash_password("admin123"),
+                    rol="Administrador",
+                    activo=True
+                )
+                db.add(admin)
+                db.commit()
+                db.refresh(admin)
+                logger.info("✅ [Seeding] Usuario Administrador sembrado.")
+
+            empresa = db.query(models.Empresa).first()
+            if not empresa:
+                empresa = models.Empresa(
+                    nombre_comercial="TLM Consulting S.A.S. (Demo)",
+                    nit="901234567-8",
+                    software_erp="SIIGO_NUBE",
+                    software_destino="SIIGO_NUBE"
+                )
+                db.add(empresa)
+                db.commit()
+                db.refresh(empresa)
+
+            if empresa and admin and (empresa not in admin.empresas_asociadas):
+                admin.empresas_asociadas.append(empresa)
+                db.commit()
+
+        except Exception as exc_db:
+            db.rollback()
+            logger.error(f"❌ [Seeding] Advertencia transaccional: {str(exc_db)}")
+        finally:
+            db.close()
+
+    except Exception as exc_startup:
+        logger.error(f"❌ [Startup] Error crítico en verificación de infraestructura: {str(exc_startup)}")
 
 # -------------------------------------------------------------------------------
-# 6. ENTIDAD: CUENTA PUC
+# 5. MONITOREO DE SALUD DE INFRAESTRUCTURA
 # -------------------------------------------------------------------------------
-class CuentaPUC(Base):
-    __tablename__ = "puc_cuentas"
-
-    id_puc = Column(Integer, primary_key=True, index=True)
-    id_empresa = Column(Integer, ForeignKey("empresas.id_empresa", ondelete="CASCADE"), nullable=False, index=True)
-    cuenta = Column(String, index=True, nullable=False)
-    nombre = Column(String, nullable=False)
-
-    empresa = relationship("Empresa", back_populates="cuentas_puc")
-
-# -------------------------------------------------------------------------------
-# 7. ENTIDAD: BALANCE TERCEROS
-# -------------------------------------------------------------------------------
-class BalanceTercero(Base):
-    __tablename__ = "balance_terceros"
-
-    id_balance = Column(Integer, primary_key=True, index=True)
-    id_empresa = Column(Integer, ForeignKey("empresas.id_empresa", ondelete="CASCADE"), nullable=False, index=True)
-    cuenta_contable = Column(String, index=True, nullable=True)
-    nombre_cuenta = Column(String, nullable=True)
-    nit_tercero = Column(String, index=True, nullable=True)
-    nombre_tercero = Column(String, nullable=True)
-    saldo_inicial = Column(Float, default=0.0)
-    debitos = Column(Float, default=0.0)
-    creditos = Column(Float, default=0.0)
-    saldo_final = Column(Float, default=0.0)
-
-    empresa = relationship("Empresa", back_populates="saldos_balance")
+@app.get("/health", tags=["Infraestructura"])
+def health_check():
+    return {
+        "status": "online",
+        "entorno": "produccion_safe",
+        "motor": "FastAPI + SQLAlchemy + PostgreSQL Neon Cloud"
+    }
