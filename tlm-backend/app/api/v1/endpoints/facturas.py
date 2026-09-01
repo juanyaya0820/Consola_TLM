@@ -1,8 +1,8 @@
 # ===============================================================================
 # ARCHIVO: tlm-backend/app/api/v1/endpoints/facturas.py
-# MOTOR ETL, EXTRACCIÓN UBL 2.1, AUDITORÍA FISCAL Y CONCILIACIÓN BANCARIA
+# MOTOR ETL, EXTRACCIÓN UBL 2.1, AUDITORÍA FISCAL, CONCILIACIÓN & CARGUE SIIGO NUBE
 # ===============================================================================
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Body
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Body, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
@@ -26,7 +26,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # ===============================================================================
-# 1. ESQUEMAS PYDANTIC (Contratos de Datos e Interfaces de Entrada)
+# 1. ESQUEMAS PYDANTIC
 # ===============================================================================
 
 class CuentaGastoUpdate(BaseModel):
@@ -53,11 +53,6 @@ class SoporteExportRequest(BaseModel):
 # ===============================================================================
 
 def generar_pdf_contingencia_bytes(num_factura: str, proveedor: str, nit: str, fecha: str, total: float) -> bytes:
-    """
-    Genera un archivo PDF 1.4 vectorial válido en memoria (ISO 32000-1)
-    para comprobantes cuya pareja XML no traía archivo PDF gráfico original.
-    Calcula dinámicamente la tabla xref para evitar páginas en blanco.
-    """
     prov_clean = str(proveedor or "Proveedor").encode('ascii', 'ignore').decode('ascii')
     nit_clean = str(nit or "0").encode('ascii', 'ignore').decode('ascii')
     fecha_clean = str(fecha or "").encode('ascii', 'ignore').decode('ascii')
@@ -110,7 +105,6 @@ def aplicar_filtros_tabla(
     fecha_hasta: Optional[str] = None, 
     tipo_comprobante: Optional[str] = None
 ):
-    """Filtros SQL dinámicos por rango de fechas y naturaleza contable."""
     if fecha_desde:
         query = query.filter(models.Factura.fecha >= fecha_desde)
     if fecha_hasta:
@@ -123,7 +117,6 @@ def aplicar_filtros_tabla(
 
 
 def autodetectar_y_normalizar_encabezados(df: pd.DataFrame) -> pd.DataFrame:
-    """Normaliza columnas en reportes contables identificando fila de encabezados."""
     palabras_clave = [
         'fecha', 'debito', 'débito', 'credito', 'crédito', 'valor', 
         'monto', 'concepto', 'descripcion', 'descripción', 'saldo', 
@@ -152,7 +145,6 @@ def autodetectar_y_normalizar_encabezados(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clasificar_impuesto_dian(descripcion: str, tipo_persona: str, base_total: float, es_ingreso: bool) -> tuple:
-    """Clasificador tributario para tarifas de RteFte (Formulario 350 DIAN)."""
     if es_ingreso:
         return (0.0, None)
 
@@ -194,7 +186,7 @@ def clasificar_impuesto_dian(descripcion: str, tipo_persona: str, base_total: fl
 
 def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[dict]:
     """
-    Procesa estructuras XML UBL 2.1 DIAN extrayendo datos contables estrictos
+    Procesa estructuras XML UBL 2.1 DIAN extrayendo datos contables
     y metadatos avanzados del tercero (Teléfono, Dirección, Correo y Responsabilidad Fiscal).
     """
     ns = {
@@ -228,7 +220,6 @@ def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[
             else: 
                 root = invoice_node
 
-        # BÚSQUEDA DIRECTA DEL cbc:ID OFICIAL
         id_elem = root.find('cbc:ID', ns)
         if id_elem is None or not id_elem.text:
             id_elem = root.find('./cbc:ID', ns)
@@ -265,7 +256,6 @@ def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[
         tercero_nombre = "Desconocido"
         tipo_persona = "Persona Jurídica" 
         
-        # Extracción de Metadatos Extendidos de Contacto y Fiscalidad
         telefono_tercero = None
         correo_tercero = None
         direccion_tercero = None
@@ -290,7 +280,6 @@ def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[
             if tax_level:
                 responsabilidad_fiscal = tax_level
 
-            # Teléfono y Correo Electrónico
             tel_txt = nodo_tercero.findtext('.//cac:Contact/cbc:Telephone', default="", namespaces=ns).strip()
             if tel_txt: 
                 telefono_tercero = tel_txt
@@ -299,7 +288,6 @@ def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[
             if mail_txt: 
                 correo_tercero = mail_txt
 
-            # Dirección de Ubicación Fiscal
             dir_txt = nodo_tercero.findtext('.//cac:PhysicalLocation//cbc:Line', default="", namespaces=ns).strip()
             if not dir_txt:
                 dir_txt = nodo_tercero.findtext('.//cac:RegistrationAddress//cbc:Line', default="", namespaces=ns).strip()
@@ -417,7 +405,6 @@ def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[
 
 
 def parsear_puc_siigo_pyme(file_bytes: bytes) -> list:
-    """Procesa el Catálogo PUC."""
     try:
         df_puc = pd.read_excel(io.BytesIO(file_bytes), header=6)
         df_puc = df_puc.dropna(axis=1, how='all')
@@ -431,7 +418,6 @@ def parsear_puc_siigo_pyme(file_bytes: bytes) -> list:
 
 
 def parsear_balance_siigo_pyme(file_bytes: bytes) -> list:
-    """Procesa el Balance de Prueba por Terceros."""
     try:
         df_balance = pd.read_excel(io.BytesIO(file_bytes), header=6)
         df_balance.columns = [str(c).strip() for c in df_balance.columns]
@@ -457,7 +443,6 @@ def parsear_balance_siigo_pyme(file_bytes: bytes) -> list:
 
 
 def parsear_extracto_pdf_multibanco(pdf_bytes: bytes, banco_hint: str = "AUTO") -> pd.DataFrame:
-    """Extrae movimientos bancarios de PDFs para múltiples entidades financieras."""
     try:
         import pypdf
     except ImportError:
@@ -470,7 +455,6 @@ def parsear_extracto_pdf_multibanco(pdf_bytes: bytes, banco_hint: str = "AUTO") 
         lines = [l.strip() for l in full_text.split('\n') if l.strip()]
         rows = []
         
-        # DAVIVIENDA
         if banco_hint == "DAVIVIENDA" or ("DAVIVIENDA" in full_text.upper() and banco_hint == "AUTO"):
             for line in lines:
                 if line.startswith(('01 ', '02 ', '03 ', '04 ', '05 ', '06 ', '07 ', '08 ', '09 ', '10 ', '11 ', '12 ', '13 ', '14 ', '15 ', '16 ', '17 ', '18 ', '19 ', '20 ', '21 ', '22 ', '23 ', '24 ', '25 ', '26 ', '27 ', '28 ', '29 ', '30 ', '31 ')):
@@ -484,7 +468,6 @@ def parsear_extracto_pdf_multibanco(pdf_bytes: bytes, banco_hint: str = "AUTO") 
                         if v_sign == '-': val = -val
                         rows.append({"Fecha": fecha_str, "Descripción": line, "Valor": val, "Banco": "Davivienda"})
 
-        # BANCOLOMBIA
         if banco_hint == "BANCOLOMBIA" or ("BANCOLOMBIA" in full_text.upper() and banco_hint == "AUTO" and not rows):
             pat = re.compile(r'^(\d{1,2}/\d{2})\s+(.+)$')
             for l in lines:
@@ -497,7 +480,6 @@ def parsear_extracto_pdf_multibanco(pdf_bytes: bytes, banco_hint: str = "AUTO") 
                         desc = rest[:rest.find(m_nums[0])].strip()
                         rows.append({"Fecha": fecha_raw, "Descripción": desc, "Valor": val, "Banco": "Bancolombia"})
 
-        # BANCO DE BOGOTÁ
         if banco_hint == "BANCO_BOGOTA" or (("BANCO DE BOGOTA" in full_text.upper() or "BANCO DE BOGOTÁ" in full_text.upper()) and banco_hint == "AUTO" and not rows):
             pat = re.compile(r'^(\d{2}/\d{2})\s+([A-Z0-9]{4})\s+(.+)$')
             for l in lines:
@@ -510,7 +492,6 @@ def parsear_extracto_pdf_multibanco(pdf_bytes: bytes, banco_hint: str = "AUTO") 
                         desc = rest[:rest.find(m_nums[0])].strip() if len(m_nums)>=1 else rest
                         rows.append({"Fecha": fecha_raw, "Descripción": f"{cod} {desc}", "Valor": val, "Banco": "Banco de Bogotá"})
 
-        # BANCO CAJA SOCIAL
         if banco_hint == "BCS" or ("BANCO CAJA SOCIAL" in full_text.upper() and banco_hint == "AUTO" and not rows):
             current_date = ""
             current_desc = []
@@ -531,7 +512,6 @@ def parsear_extracto_pdf_multibanco(pdf_bytes: bytes, banco_hint: str = "AUTO") 
                     if current_date and not l.startswith('Pag.') and not l.startswith('Información'):
                         current_desc.append(l)
 
-        # GLOBAL66
         if banco_hint == "GLOBAL66" or ("GLOBAL66" in full_text.upper() and banco_hint == "AUTO" and not rows):
             i = 0
             while i < len(lines):
@@ -571,7 +551,6 @@ def parsear_extracto_pdf_multibanco(pdf_bytes: bytes, banco_hint: str = "AUTO") 
 
 
 def cargar_bytes_a_dataframe(file_bytes: bytes, filename: str, banco_hint: str = "AUTO") -> pd.DataFrame:
-    """Carga archivos Excel, CSV o PDF a DataFrame."""
     nombre = filename.lower()
     df_raw = None
     
@@ -597,7 +576,6 @@ def cargar_bytes_a_dataframe(file_bytes: bytes, filename: str, banco_hint: str =
 
 
 def buscar_columna_por_palabras(df: pd.DataFrame, palabras_clave: list) -> Optional[str]:
-    """Busca coincidencia de columnas por palabras clave."""
     for col in df.columns:
         col_str = str(col).lower().replace(' ', '').replace('_', '').replace('.', '')
         if any(kw in col_str for kw in palabras_clave):
@@ -606,7 +584,6 @@ def buscar_columna_por_palabras(df: pd.DataFrame, palabras_clave: list) -> Optio
 
 
 def ejecutar_cruce_algoritmico(df_libros: pd.DataFrame, df_banco: pd.DataFrame, tolerancia: float) -> dict:
-    """Ejecuta la conciliación de Libros vs Extracto Bancario."""
     col_fecha_libros = buscar_columna_por_palabras(df_libros, ['fecha', 'date', 'fmov', 'fechamovimiento', 'fechaelaboracion'])
     col_desc_libros = buscar_columna_por_palabras(df_libros, ['descrip', 'detalle', 'concepto', 'tercero', 'nombre', 'nombredeltercero'])
     col_debito = buscar_columna_por_palabras(df_libros, ['debito', 'débito', 'cargo', 'egreso'])
@@ -710,7 +687,7 @@ def ejecutar_cruce_algoritmico(df_libros: pd.DataFrame, df_banco: pd.DataFrame, 
 # 3. ENDPOINTS DE LA API (@router)
 # ===============================================================================
 
-@router.get("/", summary="Listar facturas por cliente (Estándar REST HTTP 200)")
+@router.get("/", summary="Listar facturas por cliente")
 def listar_facturas(
     id_empresa: int, 
     fecha_desde: Optional[str] = None, 
@@ -718,20 +695,13 @@ def listar_facturas(
     tipo_comprobante: Optional[str] = None, 
     db: Session = Depends(get_db)
 ):
-    """
-    Retorna la lista de comprobantes registrados filtrados por empresa.
-    Garantiza un código HTTP 200 OK con arreglo [] cuando no existen registros.
-    """
     query = db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa)
     query = aplicar_filtros_tabla(query, fecha_desde, fecha_hasta, tipo_comprobante)
-    
-    facturas = query.order_by(models.Factura.id_factura.desc()).all()
-    return facturas
+    return query.order_by(models.Factura.id_factura.desc()).all()
 
 
 @router.delete("/{id_factura}", summary="Eliminar factura individual y soporte PDF")
 def eliminar_factura(id_factura: int, db: Session = Depends(get_db)):
-    """Elimina una línea contable y limpia su soporte PDF si no existen más líneas."""
     factura = db.query(models.Factura).filter(models.Factura.id_factura == id_factura).first()
     if not factura: 
         raise HTTPException(status_code=404, detail="Comprobante no encontrado.")
@@ -763,16 +733,10 @@ def eliminar_factura(id_factura: int, db: Session = Depends(get_db)):
     return {"status": "success", "mensaje": "Comprobante eliminado exitosamente."}
 
 
-@router.post("/bulk-delete", summary="Borrado masivo de facturas y soportes de origen")
+@router.post("/bulk-delete", summary="Borrado masivo de facturas")
 def borrado_masivo(payload: Union[List[int], dict] = Body(...), db: Session = Depends(get_db)):
-    """Ejecuta borrado masivo de líneas seleccionadas y depura soportes PDF huérfanos."""
     try:
-        ids = []
-        if isinstance(payload, dict):
-            ids = payload.get("ids", [])
-        elif isinstance(payload, list):
-            ids = payload
-
+        ids = payload.get("ids", []) if isinstance(payload, dict) else payload
         if not ids:
             return {"status": "success", "eliminados": 0}
 
@@ -806,16 +770,12 @@ def borrado_masivo(payload: Union[List[int], dict] = Body(...), db: Session = De
         raise HTTPException(status_code=500, detail=f"Error al eliminar registros: {str(e)}")
 
 
-@router.post("/upload", summary="Ingesta ETL de ZIPs (Motor de Pareo Aislado)")
+@router.post("/upload", summary="Ingesta ETL masiva")
 async def procesar_comprobantes_masivos(
     id_empresa: int = Form(...),
     archivos: List[UploadFile] = File(...),
     db: Session = Depends(get_db)
 ):
-    """
-    Ingesta transaccional masiva. Extrae tributación y metadatos de contacto,
-    persistiendo dinámicamente en el esquema PostgreSQL sin errores de ORM.
-    """
     estadisticas = {
         "total_archivos_inspeccionados": len(archivos),
         "facturas_procesadas": 0,
@@ -1222,9 +1182,8 @@ def obtener_pdf(
     raise HTTPException(status_code=404, detail="Soporte PDF no disponible.")
 
 
-@router.post("/export/soportes-pdf", summary="Exportar PDFs Únicos por Comprobante con Nomenclatura Secuencial")
+@router.post("/export/soportes-pdf", summary="Exportar PDFs Únicos en ZIP")
 def exportar_soportes_zip(payload: SoporteExportRequest, db: Session = Depends(get_db)):
-    """Garantiza la exportación de exactamente 1 archivo PDF por cada número de factura unívoco."""
     try:
         nums_solicitados = list(set([str(num).strip().upper() for num in payload.facturas_seleccionadas if str(num).strip()]))
 
@@ -1324,7 +1283,6 @@ def exportar_excel_auditoria(
     if not facturas: 
         raise HTTPException(status_code=404, detail="No hay datos registrados para exportar.")
         
-    # 1. Construcción de la matriz base detallada
     data_detalle = [{
         "Fecha Emisión": f.fecha, 
         "Fecha Vencimiento": getattr(f, 'fecha_vencimiento', f.fecha), 
@@ -1348,8 +1306,6 @@ def exportar_excel_auditoria(
     
     df_detalle = pd.DataFrame(data_detalle)
     
-    # 2. Definición de la matriz de agrupamiento para la pestaña 'Consolidado Gerencial'
-    # Se incorporan las columnas de contacto y tributación manteniendo el grano 1 Factura = 1 Fila
     columnas_agrupacion_gerencial = [
         "Factura N°", 
         "NIT Tercero", 
@@ -1363,21 +1319,18 @@ def exportar_excel_auditoria(
         "Fecha Vencimiento"
     ]
     
-    # Agregación matemática de subtotales por comprobante
     df_consolidado = df_detalle.groupby(columnas_agrupacion_gerencial).agg({
         "Subtotal Línea": "sum", 
         "IVA Línea": "sum", 
         "Total Línea": "sum"
     }).reset_index()
     
-    # Homologación de encabezados para reporte ejecutivo
     df_consolidado.rename(columns={
         "Subtotal Línea": "Subtotal Factura", 
         "IVA Línea": "Total IVA", 
         "Total Línea": "Total a Pagar"
     }, inplace=True)
     
-    # 3. Generación del buffer binario multipartes
     output = io.BytesIO()
     try:
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -1395,7 +1348,8 @@ def exportar_excel_auditoria(
         headers={"Content-Disposition": f"attachment; filename=Auditoria_TLM_{id_empresa}.xlsx"}
     )
 
-@router.get("/export/siigo", summary="Generar Interfaz Contable (Siigo Pyme)")
+
+@router.get("/export/siigo", summary="Generar Interfaz Contable (Siigo Pyme CSV)")
 def exportar_interfaz_siigo(
     id_empresa: int, 
     fecha_desde: Optional[str] = None, 
@@ -1428,6 +1382,113 @@ def exportar_interfaz_siigo(
     df_final.to_csv(output, sep=';', index=False, encoding='utf-8')
     output.seek(0)
     return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=Interfaz_Siigo_{id_empresa}.csv"})
+
+
+@router.get("/export/siigo-nube", summary="Generar Interfaz de Cargue Masivo para Siigo Nube (.xlsx)")
+def exportar_interfaz_siigo_nube(
+    id_empresa: int = Query(..., description="ID de la empresa activa"), 
+    tipo_comprobante_siigo: str = Query("FV-1", description="Tipo de comprobante configurado en Siigo Nube"),
+    consecutivo_inicial: int = Query(1001, description="Consecutivo numérico inicial"),
+    fecha_desde: Optional[str] = Query(None), 
+    fecha_hasta: Optional[str] = Query(None), 
+    tipo_comprobante: Optional[str] = Query(None), 
+    db: Session = Depends(get_db)
+):
+    """
+    Exporta la plantilla de importación oficial (.xlsx) de 31 columnas
+    para el módulo de Facturas de Venta / Ingresos en Siigo Nube.
+    """
+    query = db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa)
+    query = aplicar_filtros_tabla(query, fecha_desde, fecha_hasta, tipo_comprobante)
+    facturas = query.all()
+
+    if not facturas: 
+        raise HTTPException(status_code=404, detail="No hay facturas registradas para exportar.")
+
+    siigo_nube_cols = [
+        'Tipo de comprobante', 'Consecutivo', 'Identificación tercero', 'Sucursal',
+        'Código centro/subcentro de costos', 'Fecha de elaboración  ', 'Sigla Moneda',
+        'Tasa de cambio', 'Nombre contacto', 'Email Contacto', 'Orden de compra',
+        'Orden de entrega', 'Fecha orden de entrega', 'Código producto',
+        'Descripción producto', 'Identificación vendedor', 'Código de Bodega',
+        'Cantidad producto', 'Valor unitario', 'Valor Descuento', 'Base AIU',
+        'Identificación ingreso para terceros', 'Código impuesto cargo',
+        'Código impuesto cargo dos', 'Código impuesto retención', 'Código ReteICA',
+        'Código ReteIVA', 'Código forma de pago', 'Valor Forma de Pago',
+        'Fecha Vencimiento', 'Observaciones'
+    ]
+
+    mapa_consecutivos = {}
+    consecutivo_actual = consecutivo_inicial
+    for f in facturas:
+        num_clean = str(f.factura_num).strip().upper()
+        if num_clean not in mapa_consecutivos:
+            mapa_consecutivos[num_clean] = consecutivo_actual
+            consecutivo_actual += 1
+
+    filas_siigo = []
+    for f in facturas:
+        num_clean = str(f.factura_num).strip().upper()
+        consecutivo_asignado = mapa_consecutivos[num_clean]
+        
+        subtotal = float(f.subtotal or 0.0)
+        iva = float(f.iva or 0.0)
+        total_pago = subtotal + iva
+
+        cod_impuesto_cargo = 1 if iva > 0 else 0
+        cod_impuesto_rete = 1 if (f.retencion_porc and f.retencion_porc > 0) else 0
+        cod_forma_pago = 2 if str(f.forma_pago).lower() == "crédito" else 1
+
+        filas_siigo.append({
+            'Tipo de comprobante': tipo_comprobante_siigo.strip(),
+            'Consecutivo': consecutivo_asignado,
+            'Identificación tercero': str(f.nit_tercero or "").strip(),
+            'Sucursal': 0,
+            'Código centro/subcentro de costos': '',
+            'Fecha de elaboración  ': str(f.fecha or "").strip(),
+            'Sigla Moneda': 'COP',
+            'Tasa de cambio': 1,
+            'Nombre contacto': str(f.proveedor or "").strip(),
+            'Email Contacto': getattr(f, 'correo', '') or '',
+            'Orden de compra': '',
+            'Orden de entrega': '',
+            'Fecha orden de entrega': '',
+            'Código producto': str(f.cuenta_gasto or "1").strip(),
+            'Descripción producto': str(f.descripcion_item or "Servicio / Producto").strip()[:200],
+            'Identificación vendedor': '',
+            'Código de Bodega': 1,
+            'Cantidad producto': float(f.cantidad or 1.0),
+            'Valor unitario': float(f.valor_unitario or subtotal),
+            'Valor Descuento': 0,
+            'Base AIU': 0,
+            'Identificación ingreso para terceros': '',
+            'Código impuesto cargo': cod_impuesto_cargo,
+            'Código impuesto cargo dos': '',
+            'Código impuesto retención': cod_impuesto_rete,
+            'Código ReteICA': 0,
+            'Código ReteIVA': 0,
+            'Código forma de pago': cod_forma_pago,
+            'Valor Forma de Pago': total_pago,
+            'Fecha Vencimiento': str(getattr(f, 'fecha_vencimiento', f.fecha) or "").strip(),
+            'Observaciones': f"Factura {num_clean} auditada en Consola TLM"
+        })
+
+    df_siigo = pd.DataFrame(filas_siigo, columns=siigo_nube_cols)
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_siigo.to_excel(writer, index=False, sheet_name='Hoja1')
+    output.seek(0)
+
+    nombre_archivo = f"Siigo_Nube_Cargue_{tipo_comprobante_siigo}_{consecutivo_inicial}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename={nombre_archivo}",
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+    )
 
 
 @router.get("/kpis/resumen", summary="Métricas de Estado de Resultados")
@@ -1500,9 +1561,7 @@ async def ejecutar_conciliacion_vista(
     try:
         df_libros = cargar_bytes_a_dataframe(await file_siigo.read(), file_siigo.filename, "AUTO")
         df_banco = cargar_bytes_a_dataframe(await file_banco.read(), file_banco.filename, banco_origen)
-        
-        resultado = ejecutar_cruce_algoritmico(df_libros, df_banco, tolerancia)
-        return resultado
+        return ejecutar_cruce_algoritmico(df_libros, df_banco, tolerancia)
     except Exception as e:
         logger.error(f"Error en conciliación: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

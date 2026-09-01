@@ -103,7 +103,7 @@ def migracion_segura_y_seeding():
                 
                 logger.info("✅ [Migración Segura] Estructura de tablas actualizada sin pérdida de datos.")
 
-        # Asegurar la creación de tablas nuevas (SoportePDF, etc.)
+        # Asegurar la creación de tablas nuevas
         Base.metadata.create_all(bind=engine)
 
         # D. Auto-Seeding Preventivo (Solo crea si la tabla está vacía)

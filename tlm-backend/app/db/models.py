@@ -101,7 +101,7 @@ class Factura(Base):
     empresa = relationship("Empresa", back_populates="facturas")
 
 # -------------------------------------------------------------------------------
-# 5. ENTIDAD: SOPORTE PDF (SOPORTES DE ORIGEN Y CONTINGENCIA)
+# 5. ENTIDAD: SOPORTE PDF
 # -------------------------------------------------------------------------------
 class SoportePDF(Base):
     __tablename__ = "soportes_pdf"
@@ -114,7 +114,7 @@ class SoportePDF(Base):
     empresa = relationship("Empresa", back_populates="soportes_pdf")
 
 # -------------------------------------------------------------------------------
-# 6. ENTIDAD: CUENTA PUC (CEREBRO CONTABLE)
+# 6. ENTIDAD: CUENTA PUC
 # -------------------------------------------------------------------------------
 class CuentaPUC(Base):
     __tablename__ = "puc_cuentas"
@@ -127,7 +127,7 @@ class CuentaPUC(Base):
     empresa = relationship("Empresa", back_populates="cuentas_puc")
 
 # -------------------------------------------------------------------------------
-# 7. ENTIDAD: BALANCE TERCEROS (BALANCE DE PRUEBA)
+# 7. ENTIDAD: BALANCE TERCEROS
 # -------------------------------------------------------------------------------
 class BalanceTercero(Base):
     __tablename__ = "balance_terceros"
