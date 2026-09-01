@@ -1,6 +1,6 @@
 # ===============================================================================
-# ARCHIVO: app/db/models.py
-# MODELO DE DATOS UNIFICADO - COMPATIBILIDAD 100% CON MOTOR ETL Y AUDITORÍA
+# ARCHIVO: tlm-backend/app/db/models.py
+# MODELO DE DATOS UNIFICADO CON METADATOS TRIBUTARIOS Y CONTACTO DE TERCEROS
 # ===============================================================================
 import datetime
 from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text, Table
@@ -61,7 +61,7 @@ class Empresa(Base):
     saldos_balance = relationship("BalanceTercero", back_populates="empresa", cascade="all, delete-orphan")
 
 # -------------------------------------------------------------------------------
-# 4. ENTIDAD: FACTURA (MOTOR ETL Y AUDITORÍA UBL 2.1)
+# 4. ENTIDAD: FACTURA (ETL, AUDITORÍA UBL 2.1 & METADATOS TERCERO)
 # -------------------------------------------------------------------------------
 class Factura(Base):
     __tablename__ = "facturas"
@@ -74,8 +74,14 @@ class Factura(Base):
     fecha_vencimiento = Column(String, nullable=True)
     proveedor = Column(String, index=True, nullable=True)
     nit_tercero = Column(String, index=True, nullable=True)
-    descripcion_item = Column(Text, nullable=True)
     
+    # Atributos extendidos del emisor / tercero extraídos del XML UBL 2.1
+    telefono = Column(String, nullable=True)
+    direccion = Column(Text, nullable=True)
+    correo = Column(String, nullable=True)
+    responsabilidad_fiscal = Column(String, nullable=True)
+
+    descripcion_item = Column(Text, nullable=True)
     cantidad = Column(Float, default=1.0)
     valor_unitario = Column(Float, default=0.0)
     subtotal = Column(Float, default=0.0)

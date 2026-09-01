@@ -1,3 +1,7 @@
+# ===============================================================================
+# ARCHIVO: tlm-backend/app/api/v1/endpoints/facturas.py
+# MOTOR ETL, EXTRACCIÓN UBL 2.1, AUDITORÍA FISCAL Y CONCILIACIÓN BANCARIA
+# ===============================================================================
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Body
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -190,8 +194,8 @@ def clasificar_impuesto_dian(descripcion: str, tipo_persona: str, base_total: fl
 
 def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[dict]:
     """
-    Procesa estructuras XML UBL 2.1 DIAN extrayendo datos contables estrictos.
-    Usa la búsqueda directa de cbc:ID para no colapsar comprobantes de SAP o IFCO.
+    Procesa estructuras XML UBL 2.1 DIAN extrayendo datos contables estrictos
+    y metadatos avanzados del tercero (Teléfono, Dirección, Correo y Responsabilidad Fiscal).
     """
     ns = {
         'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
@@ -224,7 +228,7 @@ def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[
             else: 
                 root = invoice_node
 
-        # BÚSQUEDA DIRECTA DEL cbc:ID OFICIAL (Aísla extensiones)
+        # BÚSQUEDA DIRECTA DEL cbc:ID OFICIAL
         id_elem = root.find('cbc:ID', ns)
         if id_elem is None or not id_elem.text:
             id_elem = root.find('./cbc:ID', ns)
@@ -261,6 +265,12 @@ def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[
         tercero_nombre = "Desconocido"
         tipo_persona = "Persona Jurídica" 
         
+        # Extracción de Metadatos Extendidos de Contacto y Fiscalidad
+        telefono_tercero = None
+        correo_tercero = None
+        direccion_tercero = None
+        responsabilidad_fiscal = "R-99-PN"
+        
         if nodo_tercero is not None:
             nit_elem = nodo_tercero.find('.//cbc:CompanyID', ns)
             if nit_elem is not None and nit_elem.text:
@@ -270,12 +280,36 @@ def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[
             if name_elem is None or not name_elem.text:
                 name_elem = nodo_tercero.find('.//cac:PartyTaxScheme/cbc:RegistrationName', ns)
             if name_elem is not None and name_elem.text:
-                tercero_nombre = name_elem.text
+                tercero_nombre = name_elem.text.strip()
 
-            tax_level = nodo_tercero.findtext('.//cac:PartyTaxScheme/cbc:TaxLevelCode', default="", namespaces=ns)
-            add_id = nodo_tercero.findtext('.//cbc:AdditionalAccountID', default="", namespaces=ns)
+            tax_level = nodo_tercero.findtext('.//cac:PartyTaxScheme/cbc:TaxLevelCode', default="", namespaces=ns).strip()
+            add_id = nodo_tercero.findtext('.//cbc:AdditionalAccountID', default="", namespaces=ns).strip()
             if add_id == "2" or "PN" in tax_level or "49" in tax_level:
                 tipo_persona = "Persona Natural"
+
+            if tax_level:
+                responsabilidad_fiscal = tax_level
+
+            # Teléfono y Correo Electrónico
+            tel_txt = nodo_tercero.findtext('.//cac:Contact/cbc:Telephone', default="", namespaces=ns).strip()
+            if tel_txt: 
+                telefono_tercero = tel_txt
+
+            mail_txt = nodo_tercero.findtext('.//cac:Contact/cbc:ElectronicMail', default="", namespaces=ns).strip()
+            if mail_txt: 
+                correo_tercero = mail_txt
+
+            # Dirección de Ubicación Fiscal
+            dir_txt = nodo_tercero.findtext('.//cac:PhysicalLocation//cbc:Line', default="", namespaces=ns).strip()
+            if not dir_txt:
+                dir_txt = nodo_tercero.findtext('.//cac:RegistrationAddress//cbc:Line', default="", namespaces=ns).strip()
+            
+            ciudad_txt = nodo_tercero.findtext('.//cac:RegistrationAddress//cbc:CityName', default="", namespaces=ns).strip()
+            depto_txt = nodo_tercero.findtext('.//cac:RegistrationAddress//cbc:CountrySubentity', default="", namespaces=ns).strip()
+
+            partes_dir = [p for p in [dir_txt, ciudad_txt, depto_txt] if p]
+            if partes_dir:
+                direccion_tercero = " - ".join(partes_dir)
 
         forma_pago = "Contado"
         fecha_vencimiento = fecha
@@ -323,21 +357,45 @@ def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[
                         iva_linea = float(iva_elem.text)
 
                 lineas_factura.append({
-                    "factura_num": factura_num, "fecha": fecha, "cufe_hash": f"{cufe_base}_L{idx}",
-                    "nit_tercero": nit_tercero, "proveedor": tercero_nombre, "forma_pago": forma_pago,
-                    "fecha_vencimiento": fecha_vencimiento, "descripcion_item": item_desc[:200],
-                    "cantidad": cantidad, "valor_unitario": valor_unitario, "subtotal": subtotal_linea, 
-                    "iva": iva_linea, "naturaleza": naturaleza
+                    "factura_num": factura_num, 
+                    "fecha": fecha, 
+                    "cufe_hash": f"{cufe_base}_L{idx}",
+                    "nit_tercero": nit_tercero, 
+                    "proveedor": tercero_nombre, 
+                    "telefono": telefono_tercero,
+                    "direccion": direccion_tercero,
+                    "correo": correo_tercero,
+                    "responsabilidad_fiscal": responsabilidad_fiscal,
+                    "forma_pago": forma_pago,
+                    "fecha_vencimiento": fecha_vencimiento, 
+                    "descripcion_item": item_desc[:200],
+                    "cantidad": cantidad, 
+                    "valor_unitario": valor_unitario, 
+                    "subtotal": subtotal_linea, 
+                    "iva": iva_linea, 
+                    "naturaleza": naturaleza
                 })
         else:
             sub_elem = root.findtext('.//cac:LegalMonetaryTotal/cbc:LineExtensionAmount', default="0", namespaces=ns)
             iva_elem = root.findtext('.//cac:TaxTotal/cbc:TaxAmount', default="0", namespaces=ns)
             lineas_factura.append({
-                "factura_num": factura_num, "fecha": fecha, "cufe_hash": f"{cufe_base}_L1",
-                "nit_tercero": nit_tercero, "proveedor": tercero_nombre, "forma_pago": forma_pago,
-                "fecha_vencimiento": fecha_vencimiento, "descripcion_item": "Concepto Consolidado",
-                "cantidad": 1.0, "valor_unitario": float(sub_elem), "subtotal": float(sub_elem), 
-                "iva": float(iva_elem), "naturaleza": naturaleza
+                "factura_num": factura_num, 
+                "fecha": fecha, 
+                "cufe_hash": f"{cufe_base}_L1",
+                "nit_tercero": nit_tercero, 
+                "proveedor": tercero_nombre, 
+                "telefono": telefono_tercero,
+                "direccion": direccion_tercero,
+                "correo": correo_tercero,
+                "responsabilidad_fiscal": responsabilidad_fiscal,
+                "forma_pago": forma_pago,
+                "fecha_vencimiento": fecha_vencimiento, 
+                "descripcion_item": "Concepto Consolidado",
+                "cantidad": 1.0, 
+                "valor_unitario": float(sub_elem), 
+                "subtotal": float(sub_elem), 
+                "iva": float(iva_elem), 
+                "naturaleza": naturaleza
             })
 
         base_total_factura = sum(l["subtotal"] for l in lineas_factura)
@@ -346,7 +404,13 @@ def parsear_xml_ubl(xml_bytes: bytes, nit_empresa_activa: str = "") -> Optional[
             linea["retencion_porc"] = porcentaje
             linea["casilla_350"] = casilla
 
-        return {"lineas": lineas_factura, "cufe_base": cufe_base, "factura_num": factura_num, "pdf_b64": pdf_embebido_b64, "nit_tercero": nit_tercero}
+        return {
+            "lineas": lineas_factura, 
+            "cufe_base": cufe_base, 
+            "factura_num": factura_num, 
+            "pdf_b64": pdf_embebido_b64, 
+            "nit_tercero": nit_tercero
+        }
     except Exception as e:
         logger.error(f"Fallo en parsing XML UBL: {str(e)}")
         raise ValueError(f"XML no válido: {str(e)}")
@@ -667,9 +731,7 @@ def listar_facturas(
 
 @router.delete("/{id_factura}", summary="Eliminar factura individual y soporte PDF")
 def eliminar_factura(id_factura: int, db: Session = Depends(get_db)):
-    """
-    Elimina una línea contable y limpia su soporte PDF si no existen más líneas.
-    """
+    """Elimina una línea contable y limpia su soporte PDF si no existen más líneas."""
     factura = db.query(models.Factura).filter(models.Factura.id_factura == id_factura).first()
     if not factura: 
         raise HTTPException(status_code=404, detail="Comprobante no encontrado.")
@@ -703,10 +765,7 @@ def eliminar_factura(id_factura: int, db: Session = Depends(get_db)):
 
 @router.post("/bulk-delete", summary="Borrado masivo de facturas y soportes de origen")
 def borrado_masivo(payload: Union[List[int], dict] = Body(...), db: Session = Depends(get_db)):
-    """
-    Ejecuta el borrado masivo de líneas seleccionadas y depura soportes PDF huérfanos.
-    Soporta payloads en formato de arreglo nativo [1, 2] o diccionario {"ids": [1, 2]}.
-    """
+    """Ejecuta borrado masivo de líneas seleccionadas y depura soportes PDF huérfanos."""
     try:
         ids = []
         if isinstance(payload, dict):
@@ -754,9 +813,8 @@ async def procesar_comprobantes_masivos(
     db: Session = Depends(get_db)
 ):
     """
-    Ingesta transaccional masiva.
-    Valida duplicidad de CUFE antes de insertar y garantiza la persistencia atómica
-    de SoportePDF y Factura sin fallas por rollback.
+    Ingesta transaccional masiva. Extrae tributación y metadatos de contacto,
+    persistiendo dinámicamente en el esquema PostgreSQL sin errores de ORM.
     """
     estadisticas = {
         "total_archivos_inspeccionados": len(archivos),
@@ -812,7 +870,6 @@ async def procesar_comprobantes_masivos(
                                 factura_num = str(resultado_parsed["factura_num"]).strip().upper()
                                 nit_tercero = resultado_parsed["nit_tercero"]
 
-                                # VERIFICACIÓN PREVIA DE DUPLICADO
                                 if hasattr(models.Factura, 'cufe_hash'):
                                     if db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa, models.Factura.cufe_hash.like(f"{cufe_base}%")).first():
                                         estadisticas["facturas_duplicadas"] += 1
@@ -823,19 +880,15 @@ async def procesar_comprobantes_masivos(
                                         continue
 
                                 pdf_data_guardar = None
-                                
-                                # Regla 1: Pareja atómica 1:1 en contenedor ZIP
                                 if len(list_xmls) == 1 and len(list_pdfs) == 1:
                                     pdf_data_guardar = list_pdfs[0]["bytes"]
                                 
-                                # Regla 2: Coincidencia por nombre base
                                 if not pdf_data_guardar:
                                     for p in list_pdfs:
                                         if p["nombre_base"] == item_xml["nombre_base"]:
                                             pdf_data_guardar = p["bytes"]
                                             break
                                 
-                                # Regla 3: Coincidencia por consecutivo de factura
                                 if not pdf_data_guardar and factura_num:
                                     for p in list_pdfs:
                                         if factura_num.lower() in p["nombre_file"].lower():
@@ -850,7 +903,6 @@ async def procesar_comprobantes_masivos(
 
                                 savepoint = db.begin_nested()
 
-                                # Persistencia atómica de SoportePDF
                                 if pdf_b64_final and factura_num and hasattr(models, 'SoportePDF'):
                                     factura_num_clean = factura_num.strip().upper()
                                     if not db.query(models.SoportePDF).filter(
@@ -860,7 +912,6 @@ async def procesar_comprobantes_masivos(
                                         db.add(models.SoportePDF(id_empresa=id_empresa, factura_num=factura_num_clean, pdf_b64=pdf_b64_final))
                                         estadisticas["soportes_pdf_guardados"] += 1
 
-                                # Persistencia de Líneas Contables
                                 memoria_historica = db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa, models.Factura.nit_tercero == nit_tercero).order_by(models.Factura.id_factura.desc()).first()
 
                                 for linea in lineas_dian:
@@ -1173,10 +1224,7 @@ def obtener_pdf(
 
 @router.post("/export/soportes-pdf", summary="Exportar PDFs Únicos por Comprobante con Nomenclatura Secuencial")
 def exportar_soportes_zip(payload: SoporteExportRequest, db: Session = Depends(get_db)):
-    """
-    Garantiza la exportación de exactamente 1 archivo PDF por cada número de factura unívoco.
-    Soporta descargas masivas completas o por selección manual.
-    """
+    """Garantiza la exportación de exactamente 1 archivo PDF por cada número de factura unívoco."""
     try:
         nums_solicitados = list(set([str(num).strip().upper() for num in payload.facturas_seleccionadas if str(num).strip()]))
 
@@ -1277,6 +1325,10 @@ def exportar_excel_auditoria(
         "Factura N°": f.factura_num, 
         "NIT Tercero": f.nit_tercero, 
         "Razón Social": f.proveedor, 
+        "Teléfono": getattr(f, 'telefono', 'No Informado'),
+        "Dirección": getattr(f, 'direccion', 'No Informada'),
+        "Correo": getattr(f, 'correo', 'No Informado'),
+        "Resp. Fiscal": getattr(f, 'responsabilidad_fiscal', 'R-99-PN'),
         "Ítem / Servicio": f.descripcion_item, 
         "Cuenta Contable": f.cuenta_gasto, 
         "Cantidad": f.cantidad or 1.0, 

@@ -1,6 +1,6 @@
 # ===============================================================================
 # ARCHIVO: tlm-backend/app/main.py
-# ORQUESTRADOR PRINCIPAL: MIGRACIONES NO DESTRUCTIVAS Y SERVICIO DE BI MULTI-TENANT
+# ORQUESTRADOR PRINCIPAL: PRODUCCIÓN SEGURA (MIGRACIONES NO DESTRUCTIVAS)
 # ===============================================================================
 import os
 import logging
@@ -15,7 +15,6 @@ from app.db.session import engine, Base, SessionLocal
 from app.db import models
 from app.api.v1.endpoints import facturas, empresas, auth
 
-# Configuración del motor de registros para auditoría de servidor
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api_orchestrator")
 
@@ -26,32 +25,26 @@ app = FastAPI(
 )
 
 # -------------------------------------------------------------------------------
-# 1. POLÍTICAS DE SEGURIDAD CORS (Cross-Origin Resource Sharing)
+# 1. POLÍTICAS CORS
 # -------------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Habilita consumo seguro desde dashboards web y clientes externos
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # -------------------------------------------------------------------------------
-# 2. ENRUTADORES DE API REST
+# 2. RUTAS REST Y FRONTEND
 # -------------------------------------------------------------------------------
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Seguridad & Autenticación"])
 app.include_router(empresas.router, prefix="/api/v1/empresas", tags=["Gestión Multi-Tenant"])
 app.include_router(facturas.router, prefix="/api/v1/facturas", tags=["Motor ETL & Auditoría"])
 
-# -------------------------------------------------------------------------------
-# 3. DISPACHER DE INTERFAZ GRÁFICA (FRONTEND SPA)
-# -------------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse, tags=["Interfaz de Usuario"])
 def servir_interfaz_cliente():
-    """
-    Resuelve dinámicamente el archivo index.html dentro de la estructura de la SPA.
-    Evita la devolución de JSON vacíos o errores 404 en el punto de entrada principal.
-    """
+    """Entrega la SPA al acceder a la raíz del dominio."""
     base_dir = Path(__file__).resolve().parent.parent.parent
     posibles_rutas = [
         base_dir / "tlm-frontend" / "index.html",
@@ -65,20 +58,20 @@ def servir_interfaz_cliente():
     return HTMLResponse(content="<h2 style='font-family:sans-serif; text-align:center;'>Consola TLM - API Online</h2>")
 
 # -------------------------------------------------------------------------------
-# 4. EVENTO STARTUP: MIGRACIÓN SEGURA Y SIEMBRA PREVENTIVA
+# 3. MIGRACIÓN SEGURA NO DESTRUCTIVA Y AUTO-SEEDING (STARTUP)
 # -------------------------------------------------------------------------------
 @app.on_event("startup")
 def migracion_segura_y_seeding():
     """
-    Ejecuta DDL de alteración segura en PostgreSQL sin manipular datos activos
-    e inyecta credenciales maestras únicamente si las tablas están desiertas.
+    Ejecuta DDL no destructivo (ALTER TABLE ADD COLUMN IF NOT EXISTS).
+    Garantiza que NUNCA se borren datos existentes en Producción.
     """
     logger.info("[Startup] Verificando integridad de esquema en PostgreSQL...")
     
     try:
         with engine.connect() as conn:
             with conn.begin():
-                # Extensión de columnas en usuarios sin alteración de datos existentes
+                # A. Columnas de seguridad en 'usuarios'
                 conn.execute(text("""
                     ALTER TABLE usuarios 
                     ADD COLUMN IF NOT EXISTS hashed_password VARCHAR,
@@ -86,7 +79,20 @@ def migracion_segura_y_seeding():
                     ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT FALSE;
                 """))
 
-                # Creación condicional de la matriz de accesos multi-tenant
+                # B. Columnas extendidas de contacto y fiscalidad en 'facturas'
+                conn.execute(text("""
+                    ALTER TABLE facturas 
+                    ADD COLUMN IF NOT EXISTS telefono VARCHAR,
+                    ADD COLUMN IF NOT EXISTS direccion TEXT,
+                    ADD COLUMN IF NOT EXISTS correo VARCHAR,
+                    ADD COLUMN IF NOT EXISTS responsabilidad_fiscal VARCHAR,
+                    ADD COLUMN IF NOT EXISTS fecha_vencimiento VARCHAR,
+                    ADD COLUMN IF NOT EXISTS casilla_350 INTEGER,
+                    ADD COLUMN IF NOT EXISTS cufe_hash VARCHAR,
+                    ADD COLUMN IF NOT EXISTS estado_revision VARCHAR DEFAULT 'PENDIENTE';
+                """))
+
+                # C. Crear tabla asociativa de permisos si no existe
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS usuario_empresa (
                         id_usuario INTEGER REFERENCES usuarios(id_usuario) ON DELETE CASCADE,
@@ -97,10 +103,10 @@ def migracion_segura_y_seeding():
                 
                 logger.info("✅ [Migración Segura] Estructura de tablas actualizada sin pérdida de datos.")
 
-        # Garantiza el mapeo relacional de modelos ORM secundarios (SoportePDF, etc.)
+        # Asegurar la creación de tablas nuevas (SoportePDF, etc.)
         Base.metadata.create_all(bind=engine)
 
-        # Inyección idempotente de entidades base
+        # D. Auto-Seeding Preventivo (Solo crea si la tabla está vacía)
         db: Session = SessionLocal()
         try:
             admin = db.query(models.Usuario).filter(models.Usuario.email == "admin@tlm.com").first()
@@ -116,7 +122,7 @@ def migracion_segura_y_seeding():
                 db.add(admin)
                 db.commit()
                 db.refresh(admin)
-                logger.info("✅ [Seeding] Usuario administrador verificado.")
+                logger.info("✅ [Seeding] Usuario administrador inicial verificado.")
 
             empresa = db.query(models.Empresa).first()
             if not empresa:
@@ -136,16 +142,13 @@ def migracion_segura_y_seeding():
 
         except Exception as exc_db:
             db.rollback()
-            logger.error(f"❌ [Seeding] Advertencia transaccional: {str(exc_db)}")
+            logger.error(f"❌ [Seeding] Advertencia en siembra: {str(exc_db)}")
         finally:
             db.close()
 
     except Exception as exc_startup:
         logger.error(f"❌ [Startup] Error en verificación de esquema: {str(exc_startup)}")
 
-# -------------------------------------------------------------------------------
-# 5. MONITOREO DE SALUD
-# -------------------------------------------------------------------------------
 @app.get("/health", tags=["Infraestructura"])
 def health_check():
     return {"status": "online", "entorno": "produccion_safe"}
