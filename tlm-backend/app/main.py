@@ -48,10 +48,7 @@ app.include_router(facturas.router, prefix="/api/v1/facturas", tags=["Motor ETL 
 # -------------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse, tags=["Interfaz de Usuario"])
 def servir_interfaz_cliente():
-    """
-    Servicio dinámico del cliente Single Page Application (SPA).
-    Evalúa rutas en el árbol del repositorio para prevenir respuestas 404 en la raíz.
-    """
+    """Servicio dinámico del cliente SPA."""
     base_dir = Path(__file__).resolve().parent.parent.parent
     posibles_rutas = [
         base_dir / "tlm-frontend" / "index.html",
@@ -69,119 +66,113 @@ def servir_interfaz_cliente():
 # -------------------------------------------------------------------------------
 @app.on_event("startup")
 def migracion_segura_y_seeding():
-    """
-    Ejecuta alteraciones DDL no destructivas (ALTER TABLE IF NOT EXISTS),
-    elimina restricciones NOT NULL de columnas heredadas ('password_hash') y
-    garantiza la siembra inicial de credenciales y empresa demo sin pérdida de datos.
-    """
-    logger.info("[Startup] Verificando integridad de esquema e infraestructura en PostgreSQL Neon...")
+    logger.info("[Startup] Iniciando verificación de infraestructura de Base de Datos...")
 
+    # =========================================================================
+    # FASE 1: CREACIÓN DE TABLAS (Asegura arranque en DEV y DBs limpias)
+    # =========================================================================
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("✅ [FASE 1] Modelo ORM sincronizado y tablas base aseguradas.")
+    except Exception as e:
+        logger.error(f"❌ [FASE 1] Fallo al crear tablas base: {e}")
+
+    # =========================================================================
+    # FASE 2: MIGRACIONES NO DESTRUCTIVAS (Inyecta columnas en PRODUCCIÓN)
+    # =========================================================================
     try:
         with engine.connect() as conn:
             with conn.begin():
-                # A. Extensión de columnas en la tabla 'usuarios'
-                conn.execute(text("""
-                    ALTER TABLE usuarios 
-                    ADD COLUMN IF NOT EXISTS hashed_password VARCHAR,
-                    ADD COLUMN IF NOT EXISTS rol VARCHAR DEFAULT 'Analista',
-                    ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT FALSE;
-                """))
+                # Solo ejecutamos comandos avanzados DDL si estamos en PostgreSQL (Neon Cloud)
+                if engine.dialect.name == "postgresql":
+                    # Actualización de columnas de seguridad
+                    conn.execute(text("""
+                        ALTER TABLE usuarios 
+                        ADD COLUMN IF NOT EXISTS hashed_password VARCHAR,
+                        ADD COLUMN IF NOT EXISTS rol VARCHAR DEFAULT 'Analista',
+                        ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT FALSE;
+                    """))
 
-                # B. Resolución del bloqueo por columna heredada 'password_hash' (Remover NOT NULL)
-                conn.execute(text("""
-                    DO $$ 
-                    BEGIN 
-                        IF EXISTS (
-                            SELECT 1 FROM information_schema.columns 
-                            WHERE table_name='usuarios' AND column_name='password_hash'
-                        ) THEN
-                            ALTER TABLE usuarios ALTER COLUMN password_hash DROP NOT NULL;
-                        END IF;
-                    END $$;
-                """))
+                    # Actualización de columnas financieras en facturas
+                    conn.execute(text("""
+                        ALTER TABLE facturas 
+                        ADD COLUMN IF NOT EXISTS telefono VARCHAR,
+                        ADD COLUMN IF NOT EXISTS direccion TEXT,
+                        ADD COLUMN IF NOT EXISTS correo VARCHAR,
+                        ADD COLUMN IF NOT EXISTS responsabilidad_fiscal VARCHAR,
+                        ADD COLUMN IF NOT EXISTS fecha_vencimiento VARCHAR,
+                        ADD COLUMN IF NOT EXISTS retencion_porc DOUBLE PRECISION DEFAULT 0.0,
+                        ADD COLUMN IF NOT EXISTS retencion_valor DOUBLE PRECISION DEFAULT 0.0,
+                        ADD COLUMN IF NOT EXISTS casilla_350 INTEGER,
+                        ADD COLUMN IF NOT EXISTS cufe_hash VARCHAR,
+                        ADD COLUMN IF NOT EXISTS estado_revision VARCHAR DEFAULT 'PENDIENTE',
+                        ADD COLUMN IF NOT EXISTS pdf_b64 TEXT;
+                    """))
 
-                # C. Extensión de columnas de contacto y fiscalidad en la tabla 'facturas'
-                conn.execute(text("""
-                    ALTER TABLE facturas 
-                    ADD COLUMN IF NOT EXISTS telefono VARCHAR,
-                    ADD COLUMN IF NOT EXISTS direccion TEXT,
-                    ADD COLUMN IF NOT EXISTS correo VARCHAR,
-                    ADD COLUMN IF NOT EXISTS responsabilidad_fiscal VARCHAR,
-                    ADD COLUMN IF NOT EXISTS fecha_vencimiento VARCHAR,
-                    ADD COLUMN IF NOT EXISTS casilla_350 INTEGER,
-                    ADD COLUMN IF NOT EXISTS cufe_hash VARCHAR,
-                    ADD COLUMN IF NOT EXISTS estado_revision VARCHAR DEFAULT 'PENDIENTE';
-                """))
+                    # Prevención de fallos por llaves NOT NULL heredadas
+                    conn.execute(text("""
+                        DO $$ 
+                        BEGIN 
+                            IF EXISTS (
+                                SELECT 1 FROM information_schema.columns 
+                                WHERE table_name='usuarios' AND column_name='password_hash'
+                            ) THEN
+                                ALTER TABLE usuarios ALTER COLUMN password_hash DROP NOT NULL;
+                            END IF;
+                        END $$;
+                    """))
+                    logger.info("✅ [FASE 2] Columnas financieras y metadatos actualizados en Producción.")
+    except Exception as exc:
+        logger.warning(f"⚠️ [FASE 2] Advertencia DDL (Normal en bases de datos SQLite efímeras de pruebas): {exc}")
 
-                # D. Creación condicional de la matriz asociativa de accesos Multi-Tenant
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS usuario_empresa (
-                        id_usuario INTEGER REFERENCES usuarios(id_usuario) ON DELETE CASCADE,
-                        id_empresa INTEGER REFERENCES empresas(id_empresa) ON DELETE CASCADE,
-                        PRIMARY KEY (id_usuario, id_empresa)
-                    );
-                """))
+    # =========================================================================
+    # FASE 3: SIEMBRA DE DATOS MAESTROS (AUTO-SEEDING)
+    # =========================================================================
+    db: Session = SessionLocal()
+    try:
+        # Administrador Maestro
+        admin = db.query(models.Usuario).filter(models.Usuario.email == "admin@tlm.com").first()
+        if not admin:
+            from app.api.v1.endpoints.auth import obtener_hash_password
+            admin = models.Usuario(
+                nombre_completo="Administrador Maestro TLM",
+                email="admin@tlm.com",
+                hashed_password=obtener_hash_password("admin123"),
+                rol="Administrador",
+                activo=True
+            )
+            db.add(admin)
+            db.commit()
+            db.refresh(admin)
 
-                logger.info("✅ [Migración Segura] Estructura DDL y restricciones sincronizadas correctamente.")
+        # Empresa Demo
+        empresa = db.query(models.Empresa).first()
+        if not empresa:
+            empresa = models.Empresa(
+                nombre_comercial="TLM Consulting S.A.S. (Demo)",
+                nit="901234567-8",
+                software_erp="SIIGO_NUBE",
+                software_destino="SIIGO_NUBE"
+            )
+            db.add(empresa)
+            db.commit()
+            db.refresh(empresa)
 
-        # Creación de tablas ORM faltantes mediante metadatos de SQLAlchemy
-        Base.metadata.create_all(bind=engine)
+        # Matriz de permisos
+        if empresa and admin and (empresa not in admin.empresas_asociadas):
+            admin.empresas_asociadas.append(empresa)
+            db.commit()
 
-        # E. Siembra de Datos Maestros (Auto-Seeding Idempotente)
-        db: Session = SessionLocal()
-        try:
-            # 1. Administrador Maestro
-            admin = db.query(models.Usuario).filter(models.Usuario.email == "admin@tlm.com").first()
-            if not admin:
-                from app.api.v1.endpoints.auth import obtener_hash_password
-                admin = models.Usuario(
-                    nombre_completo="Administrador Maestro TLM",
-                    email="admin@tlm.com",
-                    hashed_password=obtener_hash_password("admin123"),
-                    rol="Administrador",
-                    activo=True
-                )
-                db.add(admin)
-                db.commit()
-                db.refresh(admin)
-                logger.info("✅ [Seeding] Usuario Administrador sembrado: admin@tlm.com / admin123")
-
-            # 2. Empresa Demo
-            empresa = db.query(models.Empresa).first()
-            if not empresa:
-                empresa = models.Empresa(
-                    nombre_comercial="TLM Consulting S.A.S. (Demo)",
-                    nit="901234567-8",
-                    software_erp="SIIGO_NUBE",
-                    software_destino="SIIGO_NUBE"
-                )
-                db.add(empresa)
-                db.commit()
-                db.refresh(empresa)
-                logger.info("✅ [Seeding] Empresa Demo sembrada: TLM Consulting S.A.S. (Demo)")
-
-            # 3. Asignación de Permisos Multi-Tenant
-            if empresa and admin and (empresa not in admin.empresas_asociadas):
-                admin.empresas_asociadas.append(empresa)
-                db.commit()
-                logger.info("✅ [Seeding] Permisos Multi-Tenant vinculados con éxito.")
-
-        except Exception as exc_db:
-            db.rollback()
-            logger.error(f"❌ [Seeding] Advertencia transaccional durante la siembra: {str(exc_db)}")
-        finally:
-            db.close()
-
-    except Exception as exc_startup:
-        logger.error(f"❌ [Startup] Error crítico en verificación de infraestructura: {str(exc_startup)}")
+        logger.info("✅ [FASE 3] Datos maestros y permisos garantizados.")
+    except Exception as exc_db:
+        db.rollback()
+        logger.error(f"❌ [FASE 3] Advertencia transaccional: {str(exc_db)}")
+    finally:
+        db.close()
 
 # -------------------------------------------------------------------------------
 # 5. MONITOREO DE SALUD DE INFRAESTRUCTURA
 # -------------------------------------------------------------------------------
 @app.get("/health", tags=["Infraestructura"])
 def health_check():
-    return {
-        "status": "online",
-        "entorno": "produccion_safe",
-        "motor": "FastAPI + SQLAlchemy + PostgreSQL Neon Cloud"
-    }
+    return {"status": "online", "entorno": "produccion_safe"}
