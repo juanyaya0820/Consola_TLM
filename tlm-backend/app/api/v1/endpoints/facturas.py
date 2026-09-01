@@ -1312,6 +1312,11 @@ def exportar_excel_auditoria(
     tipo_comprobante: Optional[str] = None, 
     db: Session = Depends(get_db)
 ):
+    """
+    Genera el informe gerencial en Excel (XLSX) multicapa.
+    Incluye la matriz de contacto y fiscalidad completa tanto en el
+    Consolidado Gerencial como en el Detalle Línea a Línea.
+    """
     query = db.query(models.Factura).filter(models.Factura.id_empresa == id_empresa)
     query = aplicar_filtros_tabla(query, fecha_desde, fecha_hasta, tipo_comprobante)
     facturas = query.all()
@@ -1319,6 +1324,7 @@ def exportar_excel_auditoria(
     if not facturas: 
         raise HTTPException(status_code=404, detail="No hay datos registrados para exportar.")
         
+    # 1. Construcción de la matriz base detallada
     data_detalle = [{
         "Fecha Emisión": f.fecha, 
         "Fecha Vencimiento": getattr(f, 'fecha_vencimiento', f.fecha), 
@@ -1341,9 +1347,37 @@ def exportar_excel_auditoria(
     } for f in facturas]
     
     df_detalle = pd.DataFrame(data_detalle)
-    df_consolidado = df_detalle.groupby(["Factura N°", "NIT Tercero", "Razón Social", "Fecha Emisión", "Forma de Pago", "Fecha Vencimiento"]).agg({"Subtotal Línea": "sum", "IVA Línea": "sum", "Total Línea": "sum"}).reset_index()
-    df_consolidado.rename(columns={"Subtotal Línea": "Subtotal Factura", "IVA Línea": "Total IVA", "Total Línea": "Total a Pagar"}, inplace=True)
     
+    # 2. Definición de la matriz de agrupamiento para la pestaña 'Consolidado Gerencial'
+    # Se incorporan las columnas de contacto y tributación manteniendo el grano 1 Factura = 1 Fila
+    columnas_agrupacion_gerencial = [
+        "Factura N°", 
+        "NIT Tercero", 
+        "Razón Social", 
+        "Teléfono",
+        "Dirección",
+        "Correo",
+        "Resp. Fiscal",
+        "Fecha Emisión", 
+        "Forma de Pago", 
+        "Fecha Vencimiento"
+    ]
+    
+    # Agregación matemática de subtotales por comprobante
+    df_consolidado = df_detalle.groupby(columnas_agrupacion_gerencial).agg({
+        "Subtotal Línea": "sum", 
+        "IVA Línea": "sum", 
+        "Total Línea": "sum"
+    }).reset_index()
+    
+    # Homologación de encabezados para reporte ejecutivo
+    df_consolidado.rename(columns={
+        "Subtotal Línea": "Subtotal Factura", 
+        "IVA Línea": "Total IVA", 
+        "Total Línea": "Total a Pagar"
+    }, inplace=True)
+    
+    # 3. Generación del buffer binario multipartes
     output = io.BytesIO()
     try:
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -1353,9 +1387,13 @@ def exportar_excel_auditoria(
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df_consolidado.to_excel(writer, index=False, sheet_name='Consolidado Gerencial')
             df_detalle.to_excel(writer, index=False, sheet_name='Detalle Línea a Línea')
+            
     output.seek(0)
-    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=Auditoria_TLM_{id_empresa}.xlsx"})
-
+    return StreamingResponse(
+        output, 
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+        headers={"Content-Disposition": f"attachment; filename=Auditoria_TLM_{id_empresa}.xlsx"}
+    )
 
 @router.get("/export/siigo", summary="Generar Interfaz Contable (Siigo Pyme)")
 def exportar_interfaz_siigo(
